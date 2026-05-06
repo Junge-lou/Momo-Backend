@@ -15,7 +15,6 @@
         <img src="https://img.shields.io/badge/Svelte-FF3E00?logo=svelte&logoColor=white" alt="Svelte">
         <img src="https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vue.js&logoColor=white" alt="Vue">
     </p>
-    <img src="./doc/images/index.jpg" width="100%" alt="Demo">
 </div>
 
 <!-- ![License](https://img.shields.io/badge/license-MIT-blue) -->
@@ -59,6 +58,30 @@ API 应用维护了一个 SQLite 数据库，并对外提供 API 接口，目前
 ## 版本更新
 
 本项目仍处于维护状态，不定期进行更新。如果想要体验到最新功能，请参考[更新文档](./doc/update.md)进行更新。
+
+## 界面展示
+
+
+<details>
+<summary>点击查看界面预览</summary>
+
+<div align="center">
+    <img src="./doc/images/preview/frontend.jpg" width="100%" alt="前端页面">
+    <p>前端评论页面展示</p>
+</div>
+
+<div align="center">
+    <img src="./doc/images/preview/login.jpg" width="100%" alt="登录界面">
+    <p>管理后台登录界面</p>
+</div>
+
+<div align="center">
+    <img src="./doc/images/preview/index.jpg" width="100%" alt="首页">
+    <p>管理后台首页</p>
+</div>
+
+</details>
+
 ## 其他
 
 * [API 文档](./doc/api.md)
