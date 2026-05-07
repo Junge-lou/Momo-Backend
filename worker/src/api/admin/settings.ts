@@ -3,7 +3,7 @@ import { Bindings } from '../../bindings';
 import { getAllSettings, getSetting, setSetting } from '../../utils/settings';
 import { sendTestEmail } from '../../utils/email';
 
-const SENSITIVE_KEYS = new Set(["admin_password", "email_password"]);
+const SENSITIVE_KEYS = new Set(["admin_password", "email_password", "admin_comment_key"]);
 
 const ALLOWED_SETTINGS = new Set([
   "site_name", "admin_email", "admin_name",
@@ -13,6 +13,13 @@ const ALLOWED_SETTINGS = new Set([
   "comment_auto_approve",
   "ip_blacklist",
   "email_blacklist",
+  "blogger_badge_enabled",
+  "blogger_badge_text",
+  "placeholder_name",
+  "placeholder_email",
+  "placeholder_content",
+  "placeholder_url",
+  "admin_comment_key",
 ]);
 
 export const getSettings = async (c: Context<{ Bindings: Bindings }>) => {

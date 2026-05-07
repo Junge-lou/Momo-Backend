@@ -7,6 +7,7 @@ interface Comment {
   contentHtml: string;
   pubDate: string;
   parentId: number | null;
+  isBlogger?: boolean;
 }
 
 interface Pagination {
@@ -17,9 +18,18 @@ interface Pagination {
 
 interface CommentsResponse {
   code: number;
+  message: string;
   data: {
     comments: Comment[];
     pagination: Pagination;
+    blogger_badge_enabled?: string;
+    blogger_badge_text?: string;
+    placeholder_name?: string;
+    placeholder_email?: string;
+    placeholder_content?: string;
+    placeholder_url?: string;
+    admin_comment_key_configured?: string;
+    admin_email_hash?: string;
   }
 }
 
@@ -31,6 +41,7 @@ interface NestedComment {
   contentHtml: string;
   pubDate: string;
   replies: NestedComment[];
+  isBlogger?: boolean;
 }
 
 interface NestedCommentsResponse {
@@ -39,6 +50,14 @@ interface NestedCommentsResponse {
   data: {
     comments: NestedComment[];
     pagination: Pagination;
+    blogger_badge_enabled?: string;
+    blogger_badge_text?: string;
+    placeholder_name?: string;
+    placeholder_email?: string;
+    placeholder_content?: string;
+    placeholder_url?: string;
+    admin_comment_key_configured?: string;
+    admin_email_hash?: string;
   }
 }
 

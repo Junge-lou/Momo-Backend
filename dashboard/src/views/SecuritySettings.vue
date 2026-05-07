@@ -44,6 +44,22 @@
         <p class="text-xs text-gray-400 mt-1">输入域名后按回车或点击"添加"，点击标签上的 × 可删除</p>
       </section>
 
+      <!-- 管理员评论密钥 -->
+      <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-lock text-purple-500"></i> 管理员评论密钥
+        </h2>
+        <p class="text-sm text-gray-500 mb-4">
+          设置密钥后，博主使用管理员邮箱在前台发表评论时需输入此密钥验证身份，验证通过的评论将直接通过审核。
+        </p>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">评论密钥</label>
+          <input v-model="adminCommentKey" type="password" placeholder="留空则不启用密钥验证"
+            class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm" />
+          <p class="text-xs text-gray-400 mt-1">留空表示不启用，设置后前端使用管理员邮箱评论时需要输入此密钥</p>
+        </div>
+      </section>
+
       <!-- IP 黑名单 -->
       <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -136,6 +152,7 @@ const ipBlacklist = ref([])
 const emailBlacklist = ref([])
 const newIpEntry = ref('')
 const newEmailEntry = ref('')
+const adminCommentKey = ref('')
 
 const originList = ref([])
 const newOrigin = ref('')
@@ -179,7 +196,7 @@ const removeEmailEntry = (index) => {
 const isDirty = ref(false)
 let initialSnapshot = ''
 
-const takeSnapshot = () => JSON.stringify({ ipList: [...ipBlacklist.value], emailList: [...emailBlacklist.value], origins: [...originList.value] })
+const takeSnapshot = () => JSON.stringify({ ipList: [...ipBlacklist.value], emailList: [...emailBlacklist.value], origins: [...originList.value], adminKey: adminCommentKey.value })
 
 watch([ipBlacklist, emailBlacklist, originList], () => {
   isDirty.value = takeSnapshot() !== initialSnapshot
@@ -206,6 +223,7 @@ const loadSettings = async () => {
   try {
     const res = await request.get('/admin/settings')
     if (res.code === 200 && res.data) {
+      adminCommentKey.value = res.data.admin_comment_key || ''
       try {
         ipBlacklist.value = res.data.ip_blacklist ? JSON.parse(res.data.ip_blacklist) : []
         if (!Array.isArray(ipBlacklist.value)) ipBlacklist.value = []
@@ -241,6 +259,7 @@ const saveSettings = async () => {
       allow_origin: originList.value.join(','),
       ip_blacklist: JSON.stringify(ipBlacklist.value),
       email_blacklist: JSON.stringify(emailBlacklist.value),
+      admin_comment_key: adminCommentKey.value,
     }
     const res = await request.put('/admin/settings', payload)
     if (res.code === 200) {

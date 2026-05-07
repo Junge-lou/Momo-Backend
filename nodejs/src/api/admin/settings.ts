@@ -4,7 +4,7 @@ import { sendTestEmail } from "../../utils/email";
 import { checkKey, extractToken } from "../../utils/security";
 import LogService from "../../utils/log";
 
-const SENSITIVE_KEYS = ["admin_password", "email_password"];
+const SENSITIVE_KEYS = ["admin_password", "email_password", "admin_comment_key"];
 
 // 可配置的字段白名单
 const ALLOWED_SETTINGS = [
@@ -15,6 +15,13 @@ const ALLOWED_SETTINGS = [
   "comment_auto_approve",
   "ip_blacklist",
   "email_blacklist",
+  "blogger_badge_enabled",
+  "blogger_badge_text",
+  "placeholder_name",
+  "placeholder_email",
+  "placeholder_content",
+  "placeholder_url",
+  "admin_comment_key",
 ];
 
 function checkAuth(ctx: koa.Context): boolean {

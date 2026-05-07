@@ -4,12 +4,12 @@
     <div class="absolute bottom-[-20%] right-[-10%] w-[50%] h-[60%] bg-[#2d5cf7] rounded-full mix-blend-multiply filter blur-[100px] opacity-40"></div>
     
     <div class="z-10 w-full max-w-[420px] px-6">
-      <div class="bg-white p-10 rounded-[1.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.1)]">
+      <div class="bg-white p-10 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.1)]">
         
         <div class="flex flex-col items-center mb-8">
           <div class="flex items-center gap-2">
             <img src="../assets/logo.svg" class="w-8 h-8" alt="Logo" />
-            <h2 class="text-[#3b82f6] text-2xl font-bold tracking-tight">登录到后台页面</h2>
+            <h2 class="text-[#3b82f6] text-2xl font-bold tracking-tight">欢迎登录管理系统</h2>
           </div>
         </div>
 
@@ -67,7 +67,7 @@
 
     <!-- 首次登录强制修改密码弹窗 -->
     <div v-if="showPasswordModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm">
-      <div class="bg-white rounded-[1.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.1)] max-w-md w-full mx-4 p-8">
+      <div class="bg-white rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] max-w-md w-full mx-4 p-8">
         <h3 class="text-[#3b82f6] text-xl font-bold mb-1">安全保护</h3>
         <p class="text-gray-500 text-sm mb-6">为了您的账户安全，初次登录请更新您的凭据。</p>
         <form @submit.prevent="handleChangePassword" class="space-y-3">

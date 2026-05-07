@@ -94,7 +94,19 @@ export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
     return c.json({ code: 403, message: "Your email has been blocked" }, 403);
   }
 
-  // 5. 准备数据 - 对所有用户输入进行 XSS 检查
+  // 5. 管理员评论密钥验证
+  const adminEmail = await getSetting(c.env, "admin_email") || "";
+  const adminCommentKey = await getSetting(c.env, "admin_comment_key") || "";
+  let isAdminVerified = false;
+  if (data.email === adminEmail && adminCommentKey) {
+    if (data.admin_key === adminCommentKey) {
+      isAdminVerified = true;
+    } else {
+      return c.json({ code: 403, message: "Invalid admin key" }, 403);
+    }
+  }
+
+  // 6. 准备数据 - 对所有用户输入进行 XSS 检查
   const content = checkContent(data.content);
   const author = checkContent(data.author);
   const url = checkContent(data.url || '');
@@ -102,7 +114,7 @@ export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
   const postUrl = checkContent(data.post_url || '');
   const uaParser = new UAParser(userAgent);
   const uaResult = uaParser.getResult();
-  const status = await getCommentStatus(c.env);
+  const status = isAdminVerified ? "approved" : await getCommentStatus(c.env);
 
   // 6. 写入 D1 数据库
   try {

@@ -62,7 +62,8 @@
   "content": "写得真好！",
   "parent_id": null,
   "post_url": "https://blog.example.com/posts/my-article",
-  "post_title": "我的文章"
+  "post_title": "我的文章",
+  "admin_key": "xxxx"
 }
 ```
 
@@ -99,6 +100,12 @@
   "message": "Your email has been blocked"
 }
 ```
+```json
+{
+  "code": 403,
+  "message": "Invalid admin key"
+}
+```
 
 > 当 `comment_auto_approve` 设为 `"false"` 时，评论提交后状态为 `"pending"`，需在管理后台审核通过后才会公开显示。
 
@@ -129,14 +136,23 @@
         "contentText": "写得真好！",
         "contentHtml": "<p>写得真好！</p>",
         "pubDate": "2025-10-23T10:00:00Z",
-        "parentId": null
+        "parentId": null,
+        "isBlogger": false
       }
     ],
     "pagination": {
       "page": 1,
       "limit": 20,
       "totalPage": 1
-    }
+    },
+    "blogger_badge_enabled": "true",
+    "blogger_badge_text": "博主",
+    "placeholder_name": "输入昵称",
+    "placeholder_email": "输入邮箱",
+    "placeholder_content": "写下你的评论...",
+    "placeholder_url": "https://",
+    "admin_comment_key_configured": "false",
+    "admin_email_hash": "xxxxx"
   }
 }
 ```
@@ -157,6 +173,7 @@
         "contentText": "写得真好！",
         "contentHtml": "<p>写得真好！</p>",
         "pubDate": "2025-10-23T10:00:00Z",
+        "isBlogger": true,
         "replies": [
           {
             "id": 124,
@@ -166,6 +183,7 @@
             "contentText": "同意",
             "contentHtml": "<p>同意</p>",
             "pubDate": "2025-10-23T11:00:00Z",
+            "isBlogger": false,
             "replies": []
           }
         ]
@@ -175,7 +193,15 @@
       "page": 1,
       "limit": 20,
       "total": 1
-    }
+    },
+    "blogger_badge_enabled": "true",
+    "blogger_badge_text": "博主",
+    "placeholder_name": "输入昵称",
+    "placeholder_email": "输入邮箱",
+    "placeholder_content": "写下你的评论...",
+    "placeholder_url": "https://",
+    "admin_comment_key_configured": "false",
+    "admin_email_hash": "xxxxx"
   }
 }
 ```
@@ -260,12 +286,19 @@
     "notification_template": "",
     "comment_auto_approve": "true",
     "ip_blacklist": "[\"192.168.1.100\",\"10.0.0.0/8\"]",
-    "email_blacklist": "[\"spam@example.com\"]"
+    "email_blacklist": "[\"spam@example.com\"]",
+    "blogger_badge_enabled": "false",
+    "blogger_badge_text": "",
+    "placeholder_name": "",
+    "placeholder_email": "",
+    "placeholder_content": "",
+    "placeholder_url": "",
+    "admin_comment_key": ""
   }
 }
 ```
 
-> `email_password` 和 `admin_name` 等敏感字段始终返回空字符串。
+> `email_password`、`admin_name`、`admin_comment_key` 等敏感字段始终返回空字符串。
 
 **响应（失败）**：
 ```json

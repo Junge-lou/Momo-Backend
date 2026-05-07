@@ -2,12 +2,15 @@ package http
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"log"
 	"momo-backend-go/internal/model"
 	"momo-backend-go/internal/pkg/utils"
 	"momo-backend-go/internal/repository"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -79,6 +82,21 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		return
 	}
 
+	// 管理员评论密钥验证
+	adminEmail := utils.GetSetting("admin_email")
+	adminCommentKey := utils.GetSetting("admin_comment_key")
+	isAdminVerified := false
+	if req.Email == adminEmail && adminCommentKey != "" {
+		if req.AdminKey == adminCommentKey {
+			isAdminVerified = true
+		} else {
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    403,
+				"message": "Invalid admin key",
+			})
+			return
+		}
+	}
 	// 5. XSS 检查（纯文本字段使用 CheckContent，content 走 Markdown + bluemonday 完整净化）
 	sanitizedAuthor := utils.CheckContent(req.Author)
 	sanitizedURL := utils.CheckContent(req.URL)
@@ -107,7 +125,12 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		Browser:     ptrString(browserStr),
 		UserAgent:   ptrString(uaString),
 		OS:          ptrString(osStr),
-		Status:      utils.GetCommentStatus(),
+		Status: func() string {
+			if isAdminVerified {
+				return "approved"
+			}
+			return utils.GetCommentStatus()
+		}(),
 	}
 
 	// 4. 写入数据库
@@ -193,9 +216,28 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 		page = 1
 	}
 
+	// 读取博主标识设置
+	adminEmail := utils.GetSetting("admin_email")
+	adminEmailHash := ""
+	if adminEmail != "" {
+		adminEmailHash = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(adminEmail)))))
+	}
+	badgeEnabled := utils.GetSetting("blogger_badge_enabled")
+	if badgeEnabled == "" {
+		badgeEnabled = "false"
+	}
+	badgeText := utils.GetSetting("blogger_badge_text")
+	placeholderName := utils.GetSetting("placeholder_name")
+	placeholderEmail := utils.GetSetting("placeholder_email")
+	placeholderContent := utils.GetSetting("placeholder_content")
+	placeholderURL := utils.GetSetting("placeholder_url")
+	adminCommentKey := utils.GetSetting("admin_comment_key")
+	adminCommentKeyConfigured := "false"
+	if adminCommentKey != "" {
+		adminCommentKeyConfigured = "true"
+	}
+
 	// 1. 从 Repo 获取所有已审核评论 (status = 'approved')
-	// 注意：如果是嵌套模式，通常需要查出所有评论来构建树；
-	// 如果是非嵌套模式，可以直接在 SQL 层做分页。
 	allComments, err := h.Repo.GetByPostSlug(c.Request.Context(), slug)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "查询失败"})
@@ -214,7 +256,8 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 			ContentHTML: comm.ContentHTML,
 			PubDate:     time.UnixMilli(comm.PubDate).UTC().Format("2006-01-02T15:04:05.000Z"),
 			ParentID:    comm.ParentID,
-			Replies:     []*model.CommentResponse{}, // 初始化空切片避免返回 null
+			Replies:     []*model.CommentResponse{},
+			IsBlogger:   comm.Email == adminEmail,
 		}
 		allResponses = append(allResponses, res)
 	}
@@ -253,6 +296,14 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 				"limit":     limit,
 				"totalPage": (total + limit - 1) / limit,
 			},
+			"blogger_badge_enabled":        badgeEnabled,
+			"blogger_badge_text":           badgeText,
+			"placeholder_name":             placeholderName,
+			"placeholder_email":            placeholderEmail,
+			"placeholder_content":          placeholderContent,
+			"placeholder_url":              placeholderURL,
+			"admin_comment_key_configured": adminCommentKeyConfigured,
+			"admin_email_hash":             adminEmailHash,
 		},
 	})
 }

@@ -1,14 +1,27 @@
 import { Comment } from "../type/prisma";
 import { CommentsResponse, NestedCommentsResponse, NestedComment, CommentAdminResponse } from "../type/api";
 import { getAvatar } from "../utils/getAvatar";
+import { getSetting } from "../utils/settings";
+import crypto from "crypto";
 
 /*
 * 将数据库获取的评论数据，按照指定的格式处理后返回给前端
 */
-const getResponseComment = 
+const getResponseComment =
 async (comments: Comment[] | null, page: number, limit: number, nested: boolean): Promise<CommentsResponse | NestedCommentsResponse> => {
+  // 读取博主标识设置
+  const adminEmail = await getSetting("admin_email") || "";
+  const badgeEnabled = await getSetting("blogger_badge_enabled") || "false";
+  const badgeText = await getSetting("blogger_badge_text") || "";
+  const placeholderName = await getSetting("placeholder_name") || "";
+  const placeholderEmail = await getSetting("placeholder_email") || "";
+  const placeholderContent = await getSetting("placeholder_content") || "";
+  const placeholderUrl = await getSetting("placeholder_url") || "";
+  const adminCommentKey = await getSetting("admin_comment_key") || "";
+  const adminEmailHash = adminEmail ? crypto.createHash("sha256").update(adminEmail.toLowerCase().trim()).digest("hex") : "";
+
   if(comments === null) {
-    return { 
+    return {
       code: 200,
       message: "Comments fetched successfully",
       data: { comments: [], pagination: { page, limit, totalPage: 0 } }
@@ -16,7 +29,7 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
   }
   if (nested) {
     // 构建嵌套结构的评论数据
-    const nestedComments = await buildNestedComments(comments);
+    const nestedComments = await buildNestedComments(comments, adminEmail);
     return {
       code: 200,
       message: "Comments fetched successfully",
@@ -27,6 +40,14 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
           limit,
           totalPage: Math.ceil(comments.length/limit),
         },
+        blogger_badge_enabled: badgeEnabled,
+        blogger_badge_text: badgeText,
+        placeholder_name: placeholderName,
+        placeholder_email: placeholderEmail,
+        placeholder_content: placeholderContent,
+        placeholder_url: placeholderUrl,
+        admin_comment_key_configured: adminCommentKey ? "true" : "false",
+        admin_email_hash: adminEmailHash,
       }
     }
   } else {
@@ -39,9 +60,10 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
       contentText: comment.content_text,
       contentHtml: comment.content_html,
       pubDate: comment.pub_date.toISOString(),
-      parentId: comment.parent_id
+      parentId: comment.parent_id,
+      isBlogger: comment.email === adminEmail
     })));
-    
+
     return {
       code: 200,
       message: "Comments fetched successfully",
@@ -51,18 +73,26 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
           page,
           limit,
           totalPage: comments.length
-        }
+        },
+        blogger_badge_enabled: badgeEnabled,
+        blogger_badge_text: badgeText,
+        placeholder_name: placeholderName,
+        placeholder_email: placeholderEmail,
+        placeholder_content: placeholderContent,
+        placeholder_url: placeholderUrl,
+        admin_comment_key_configured: adminCommentKey ? "true" : "false",
+        admin_email_hash: adminEmailHash,
       }
     };
   }
 };
 
 // 辅助函数：构建嵌套评论结构
-const buildNestedComments = async (comments: Comment[]): Promise<NestedComment[]> => {
+const buildNestedComments = async (comments: Comment[], adminEmail: string): Promise<NestedComment[]> => {
   // 创建评论映射以便快速查找
   const commentMap = new Map<number, NestedComment>();
   const rootComments: NestedComment[] = [];
-  
+
   // 初始化所有评论
   const initializedComments = await Promise.all(comments.map(async comment => {
     return {
@@ -73,7 +103,8 @@ const buildNestedComments = async (comments: Comment[]): Promise<NestedComment[]
       contentText: comment.content_text,
       contentHtml: comment.content_html,
       pubDate: comment.pub_date.toISOString(),
-      replies: [] as NestedComment[]
+      replies: [] as NestedComment[],
+      isBlogger: comment.email === adminEmail
     };
   }));
   

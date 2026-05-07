@@ -68,8 +68,9 @@ func (h *CommentHandler) GetSettings(c *gin.Context) {
 	all := utils.GetAllSettings()
 
 	sensitiveKeys := map[string]bool{
-		"admin_password": true,
-		"email_password": true,
+		"admin_password":    true,
+		"email_password":    true,
+		"admin_comment_key": true,
 	}
 
 	allowedSettings := map[string]bool{
@@ -88,6 +89,13 @@ func (h *CommentHandler) GetSettings(c *gin.Context) {
 		"comment_auto_approve":  true,
 		"ip_blacklist":          true,
 		"email_blacklist":       true,
+		"blogger_badge_enabled": true,
+		"blogger_badge_text":    true,
+		"placeholder_name":      true,
+		"placeholder_email":     true,
+		"placeholder_content":   true,
+		"placeholder_url":       true,
+		"admin_comment_key":     true,
 	}
 
 	filtered := make(map[string]string)
@@ -137,6 +145,13 @@ func (h *CommentHandler) UpdateSettings(c *gin.Context) {
 		"comment_auto_approve":  true,
 		"ip_blacklist":          true,
 		"email_blacklist":       true,
+		"blogger_badge_enabled": true,
+		"blogger_badge_text":    true,
+		"placeholder_name":      true,
+		"placeholder_email":     true,
+		"placeholder_content":   true,
+		"placeholder_url":       true,
+		"admin_comment_key":     true,
 	}
 
 	for key := range body {
@@ -468,7 +483,8 @@ func (h *CommentHandler) ExportSettings(c *gin.Context) {
 	allowList := map[string]bool{
 		"site_name": true, "admin_email": true,
 		"smtp_host": true, "smtp_port": true, "email_user": true, "email_password": true, "email_secure": true,
-		"allow_origin": true, "email_enabled": true,
+		"admin_comment_key": true,
+		"allow_origin":      true, "email_enabled": true,
 		"reply_template": true, "notification_template": true,
 	}
 	for key := range allowList {
@@ -598,7 +614,7 @@ func (h *CommentHandler) ImportComments(c *gin.Context) {
 		resp["errors"] = errors
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
+		"code": 200,
 		"message": "导入完成，成功 " + strconv.Itoa(imported) + " 条" + func() string {
 			if len(errors) > 0 {
 				return "，失败 " + strconv.Itoa(len(errors)) + " 条"
@@ -620,7 +636,8 @@ func (h *CommentHandler) ImportSettings(c *gin.Context) {
 	allowList := map[string]bool{
 		"site_name": true, "admin_email": true, "admin_name": true,
 		"smtp_host": true, "smtp_port": true, "email_user": true, "email_password": true, "email_secure": true,
-		"allow_origin": true, "email_enabled": true,
+		"admin_comment_key": true,
+		"allow_origin":      true, "email_enabled": true,
 		"reply_template": true, "notification_template": true,
 	}
 

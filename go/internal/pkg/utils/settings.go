@@ -37,6 +37,8 @@ var allowedSettings = map[string]bool{
 	"comment_auto_approve":  true,
 	"ip_blacklist":          true,
 	"email_blacklist":       true,
+	"blogger_badge_enabled": true,
+	"blogger_badge_text":    true,
 }
 
 func InitSettingsDB(db *sqlx.DB) {

@@ -60,6 +60,64 @@
           关闭后，新评论状态为"待审核"，需在评论管理中手动通过
         </p>
       </section>
+
+      <!-- 博主标识 -->
+      <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-crown text-blue-500"></i> 博主标识
+        </h2>
+        <div class="space-y-5">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm font-medium text-gray-700">启用博主标签</p>
+              <p class="text-xs text-gray-400 mt-1">开启后博主的评论会显示特殊标识</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" v-model="form.blogger_badge_enabled" class="sr-only peer" true-value="true" false-value="false">
+              <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              <span class="ms-3 text-sm font-medium text-gray-700">
+                {{ form.blogger_badge_enabled === 'true' ? '已启用' : '已禁用' }}
+              </span>
+            </label>
+          </div>
+          <div v-if="form.blogger_badge_enabled === 'true'">
+            <label class="block text-sm font-medium text-gray-700 mb-1">自定义标签文字</label>
+            <input v-model="form.blogger_badge_text" type="text" placeholder="例如：博主"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm" />
+            <p class="text-xs text-gray-400 mt-1">将显示在博主评论名称的旁边</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 自定义占位符 -->
+      <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-pen-to-square text-blue-500"></i> 自定义占位符
+        </h2>
+        <p class="text-xs text-gray-400 mb-4">留空则使用默认占位文字</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">昵称输入框</label>
+            <input v-model="form.placeholder_name" type="text" placeholder="例如：输入昵称"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">邮箱输入框</label>
+            <input v-model="form.placeholder_email" type="text" placeholder="例如：输入邮箱"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">评论内容输入框</label>
+            <input v-model="form.placeholder_content" type="text" placeholder="例如：写下你的评论..."
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm" />
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="block text-sm font-medium text-gray-700 mb-1">网址输入框</label>
+          <input v-model="form.placeholder_url" type="text" placeholder="例如：https://"
+            class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm" />
+        </div>
+      </section>
     </div>
   </AdminLayout>
 </template>
@@ -84,6 +142,12 @@ const form = reactive({
   site_name: '',
   admin_email: '',
   comment_auto_approve: 'true',
+  blogger_badge_enabled: 'false',
+  blogger_badge_text: '',
+  placeholder_name: '',
+  placeholder_email: '',
+  placeholder_content: '',
+  placeholder_url: '',
 })
 
 const takeSnapshot = () => JSON.stringify({ ...form })

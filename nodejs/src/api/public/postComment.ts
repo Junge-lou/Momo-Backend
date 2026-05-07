@@ -4,6 +4,7 @@ import CommentService  from "../../orm/commentService";
 import { Comment, CreateCommentInput } from "../../type/prisma"
 import { sendCommentReplyNotification, sendCommentNotification, isEmailServiceAvailable } from "../../utils/email";
 import { canPostComment, checkContent, sanitizeHtml, checkIpBlacklist, checkEmailBlacklist, getCommentStatus } from "../../utils/security"
+import { getSetting } from "../../utils/settings"
 import { parseMarkdown } from "../../utils/markdown"
 import LogService from "../../utils/log";
 
@@ -36,6 +37,20 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
     return;
   }
 
+  // 管理员评论密钥验证
+  const adminEmail = await getSetting("admin_email") || "";
+  const adminCommentKey = await getSetting("admin_comment_key") || "";
+  let isAdminVerified = false;
+  if (data.email === adminEmail && adminCommentKey) {
+    if (data.admin_key === adminCommentKey) {
+      isAdminVerified = true;
+    } else {
+      ctx.status = 403;
+      ctx.body = { code: 403, message: "Invalid admin key" };
+      return;
+    }
+  }
+
   // 对所有用户输入进行 XSS 检查
     const content = checkContent(data.content);
     const author = checkContent(data.author);
@@ -58,7 +73,7 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
       content_text: content,
       content_html: sanitizeHtml(parseMarkdown(content)),
       parent_id: data.parent_id ?? null,
-      status: await getCommentStatus()
+      status: isAdminVerified ? "approved" : await getCommentStatus()
     }
     const comment = await CommentService.createComment(commentData);
     // 发送邮件通知（不影响评论结果）

@@ -14,17 +14,17 @@
       <!-- 导出评论数据 -->
       <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <i class="fa-solid fa-download text-blue-500"></i> 导出数据
+          <i class="fa-solid fa-download text-gray-500"></i> 导出数据
         </h2>
         <p class="text-sm text-gray-500 mb-5">将数据导出为 JSON 文件，可用于备份或迁移。</p>
         <div class="flex flex-wrap gap-4">
           <button @click="exportComments" :disabled="exportingComments"
-            class="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm font-medium">
+            class="flex items-center gap-2 px-5 py-2.5 bg-sky-500 text-white rounded-lg hover:bg-sky-600 disabled:opacity-50 transition-colors text-sm font-medium">
             <i class="fa-solid" :class="exportingComments ? 'fa-spinner fa-spin' : 'fa-comments'"></i>
             {{ exportingComments ? '导出中...' : '导出评论数据' }}
           </button>
           <button @click="exportSettings" :disabled="exportingSettings"
-            class="flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors text-sm font-medium">
+            class="flex items-center gap-2 px-5 py-2.5 bg-sky-500 text-white rounded-lg hover:bg-sky-600 disabled:opacity-50 transition-colors text-sm font-medium">
             <i class="fa-solid" :class="exportingSettings ? 'fa-spinner fa-spin' : 'fa-gear'"></i>
             {{ exportingSettings ? '导出中...' : '导出系统设置' }}
           </button>
@@ -34,17 +34,17 @@
       <!-- 导入评论数据 -->
       <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <i class="fa-solid fa-upload text-amber-500"></i> 导入数据
+          <i class="fa-solid fa-upload text-gray-500"></i> 导入数据
         </h2>
         <p class="text-sm text-gray-500 mb-5">导入之前导出的 JSON 文件。导入操作会新增数据，不会覆盖已有数据。</p>
 
         <div class="flex flex-wrap gap-4 mb-4">
-          <label class="flex items-center gap-2 px-5 py-2.5 bg-amber-600 text-white rounded-lg hover:bg-amber-700 cursor-pointer transition-colors text-sm font-medium">
+          <label class="flex items-center gap-2 px-5 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 cursor-pointer transition-colors text-sm font-medium">
             <i class="fa-solid fa-file-import"></i>
             选择评论 JSON 文件
             <input type="file" accept=".json" @change="onFileSelected($event, 'comments')" class="hidden" />
           </label>
-          <label class="flex items-center gap-2 px-5 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 cursor-pointer transition-colors text-sm font-medium">
+          <label class="flex items-center gap-2 px-5 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 cursor-pointer transition-colors text-sm font-medium">
             <i class="fa-solid fa-file-import"></i>
             选择设置 JSON 文件
             <input type="file" accept=".json" @change="onFileSelected($event, 'settings')" class="hidden" />
@@ -62,7 +62,7 @@
             </div>
             <div class="flex items-center gap-2">
               <button @click="importData" :disabled="importing"
-                class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 transition-colors text-sm font-medium">
+                class="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 disabled:opacity-50 transition-colors text-sm font-medium">
                 <i class="fa-solid" :class="importing ? 'fa-spinner fa-spin' : 'fa-upload'"></i>
                 {{ importing ? '导入中...' : '开始导入' }}
               </button>

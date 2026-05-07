@@ -10,6 +10,7 @@ type CommentRequest struct {
 	ParentID  *int64 `json:"parent_id"`
 	PostURL   string `json:"post_url"`
 	PostTitle string `json:"post_title"`
+	AdminKey  string `json:"admin_key"`
 }
 
 // LoginRequest 登录请求体
@@ -29,6 +30,7 @@ type CommentResponse struct {
 	PubDate     string             `json:"pubDate"`
 	ParentID    *int64             `json:"parentId,omitempty"`
 	Replies     []*CommentResponse `json:"replies,omitempty"`
+	IsBlogger   bool               `json:"isBlogger"`
 }
 
 type AdminCommentResponse struct {
