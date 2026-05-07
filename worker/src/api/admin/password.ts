@@ -15,7 +15,7 @@ export const changePassword = async (c: Context<{ Bindings: Bindings }>) => {
 
   const valid = await checkAdminCredentials(c.env, old_name, old_password);
   if (!valid) {
-    return c.json({ code: 400, message: "Current credentials are incorrect" }, 401);
+    return c.json({ code: 401, message: "Current credentials are incorrect" }, 401);
   }
 
   await changeAdminPassword(c.env, new_name, new_password);

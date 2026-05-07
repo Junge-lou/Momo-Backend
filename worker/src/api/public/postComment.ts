@@ -2,7 +2,7 @@ import { Context } from 'hono';
 import { UAParser } from 'ua-parser-js';
 import { Bindings } from '../../bindings';
 import { sendCommentNotification, sendCommentReplyNotification } from '../../utils/email';
-import { isEmailEnabled } from '../../utils/settings';
+import { isEmailEnabled, getSetting } from '../../utils/settings';
 import { parseMarkdown } from '../../utils/markdown';
 
 // 检查内容，删除 XSS 攻击脚本
@@ -24,27 +24,77 @@ export function checkContent(content: string): string {
         .replace(/<\/?(?:iframe|object|embed|frame|meta|link|base|form|input)\b[^>]*>/gi, '');
 }
 
+// IP CIDR 匹配
+function ipInCIDR(ip: string, cidr: string): boolean {
+  const [range, bits = "32"] = cidr.split("/");
+  const prefixLen = parseInt(bits);
+  const mask = ~(2 ** (32 - prefixLen) - 1);
+  const ipNum = ip.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct), 0);
+  const rangeNum = range.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct), 0);
+  return (ipNum & mask) >>> 0 === (rangeNum & mask) >>> 0;
+}
+
+async function checkIpBlacklist(env: Bindings, ip: string): Promise<boolean> {
+  const blacklistStr = await getSetting(env, "ip_blacklist");
+  if (!blacklistStr) return false;
+  try {
+    const blacklist = JSON.parse(blacklistStr);
+    if (!Array.isArray(blacklist)) return false;
+    return blacklist.some((entry: string) => {
+      if (entry.includes("/")) return ipInCIDR(ip, entry);
+      return ip === entry;
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function checkEmailBlacklist(env: Bindings, email: string): Promise<boolean> {
+  const blacklistStr = await getSetting(env, "email_blacklist");
+  if (!blacklistStr) return false;
+  try {
+    const blacklist = JSON.parse(blacklistStr);
+    return Array.isArray(blacklist) && blacklist.includes(email);
+  } catch {
+    return false;
+  }
+}
+
+async function getCommentStatus(env: Bindings): Promise<string> {
+  const autoApprove = await getSetting(env, "comment_auto_approve");
+  return autoApprove === "false" ? "pending" : "approved";
+}
+
 export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
   const data = await c.req.json();
   const userAgent = c.req.header('user-agent') || "";
-  
+
   // 1. 获取 IP (Worker 获取 IP 的标准方式)
   const ip = c.req.header('cf-connecting-ip') || "127.0.0.1";
 
   // 2. 检查评论频率控制 (对应 canPostComment)
-  // 这里建议使用 D1 查最近一条评论的时间，或者直接放行（如果使用了 Cloudflare WAF）
   const lastComment = await c.env.MOMO_DB.prepare(
     "SELECT pub_date FROM Comment WHERE ip_address = ? ORDER BY pub_date DESC LIMIT 1"
   ).bind(ip).first<{ pub_date: string }>();
 
   if (lastComment) {
     const lastTime = new Date(lastComment.pub_date).getTime();
-    if (Date.now() - lastTime < 60 * 1000) { // 10秒限流示例
-      return c.json({ message: "Time limit exceeded. Please wait." }, 429);
+    if (Date.now() - lastTime < 60 * 1000) {
+      return c.json({ code: 429, message: "Time limit exceeded. Please wait." }, 429);
     }
   }
 
-  // 3. 准备数据 - 对所有用户输入进行 XSS 检查
+  // 3. 检查 IP 黑名单
+  if (await checkIpBlacklist(c.env, ip)) {
+    return c.json({ code: 403, message: "Your IP has been blocked" }, 403);
+  }
+
+  // 4. 检查邮箱黑名单
+  if (data.email && await checkEmailBlacklist(c.env, data.email)) {
+    return c.json({ code: 403, message: "Your email has been blocked" }, 403);
+  }
+
+  // 5. 准备数据 - 对所有用户输入进行 XSS 检查
   const content = checkContent(data.content);
   const author = checkContent(data.author);
   const url = checkContent(data.url || '');
@@ -52,13 +102,14 @@ export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
   const postUrl = checkContent(data.post_url || '');
   const uaParser = new UAParser(userAgent);
   const uaResult = uaParser.getResult();
+  const status = await getCommentStatus(c.env);
 
-  // 4. 写入 D1 数据库
+  // 6. 写入 D1 数据库
   try {
     const { success } = await c.env.MOMO_DB.prepare(`
       INSERT INTO Comment (
-        pub_date, post_slug, author, email, url, ip_address, 
-        os, browser, device, user_agent, content_text, content_html, 
+        pub_date, post_slug, author, email, url, ip_address,
+        os, browser, device, user_agent, content_text, content_html,
         parent_id, status
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
@@ -75,7 +126,7 @@ export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
       content,
       parseMarkdown(content),
       data.parent_id || null,
-      "approved" // 或者从环境变量读取默认状态
+      status
     ).run();
 
     if (!success) throw new Error("Database insert failed");

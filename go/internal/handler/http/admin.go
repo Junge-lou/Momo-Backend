@@ -19,7 +19,7 @@ func (h *CommentHandler) Login(c *gin.Context) {
 	if utils.Limiter.IsIPBlocked(ip) {
 		log.Printf("[WARN] Blocked IP attempted to login: %s", ip)
 		c.JSON(http.StatusForbidden, gin.H{
-			"code":    400,
+			"code":    403,
 			"message": "IP is blocked due to multiple failed"})
 		return
 	}
@@ -39,11 +39,11 @@ func (h *CommentHandler) Login(c *gin.Context) {
 
 		if isBlocked {
 			c.JSON(http.StatusForbidden, gin.H{
-				"code":    400,
+				"code":    403,
 				"message": "IP is blocked due to multiple failed"})
 		} else {
 			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    400,
+				"code":    401,
 				"message": "Invalid username or password"})
 		}
 		return
@@ -85,6 +85,9 @@ func (h *CommentHandler) GetSettings(c *gin.Context) {
 		"email_enabled":         true,
 		"reply_template":        true,
 		"notification_template": true,
+		"comment_auto_approve":  true,
+		"ip_blacklist":          true,
+		"email_blacklist":       true,
 	}
 
 	filtered := make(map[string]string)
@@ -131,6 +134,9 @@ func (h *CommentHandler) UpdateSettings(c *gin.Context) {
 		"email_enabled":         true,
 		"reply_template":        true,
 		"notification_template": true,
+		"comment_auto_approve":  true,
+		"ip_blacklist":          true,
+		"email_blacklist":       true,
 	}
 
 	for key := range body {

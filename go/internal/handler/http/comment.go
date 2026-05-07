@@ -48,14 +48,7 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		deviceStr = "Desktop"
 	}
 
-	// 2. XSS 检查（纯文本字段使用 CheckContent，content 走 Markdown + bluemonday 完整净化）
-	sanitizedAuthor := utils.CheckContent(req.Author)
-	sanitizedURL := utils.CheckContent(req.URL)
-	sanitizedPostTitle := utils.CheckContent(req.PostTitle)
-	sanitizedPostURL := utils.CheckContent(req.PostURL)
-	sanitizedContent := utils.CheckContent(req.Content)
-
-	// 检查评论频率控制 (60秒冷却)
+	// 2. 检查评论频率控制 (60秒冷却)
 	clientIP := utils.GetClientIP(c)
 	lastComment, err := h.Repo.GetLastCommentByIP(c.Request.Context(), clientIP)
 	if err == nil && lastComment != nil && lastComment.PubDate > 0 {
@@ -68,7 +61,32 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		}
 	}
 
-	// 3. 构造数据库模型
+	// 3. 检查 IP 黑名单
+	if utils.CheckIPBlacklist(clientIP) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "Your IP has been blocked",
+		})
+		return
+	}
+
+	// 4. 检查邮箱黑名单
+	if req.Email != "" && utils.CheckEmailBlacklist(req.Email) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "Your email has been blocked",
+		})
+		return
+	}
+
+	// 5. XSS 检查（纯文本字段使用 CheckContent，content 走 Markdown + bluemonday 完整净化）
+	sanitizedAuthor := utils.CheckContent(req.Author)
+	sanitizedURL := utils.CheckContent(req.URL)
+	sanitizedPostTitle := utils.CheckContent(req.PostTitle)
+	sanitizedPostURL := utils.CheckContent(req.PostURL)
+	sanitizedContent := utils.CheckContent(req.Content)
+
+	// 6. 构造数据库模型
 	comment := &model.Comment{
 		PostSlug: req.PostSlug,
 		Author:   sanitizedAuthor,
@@ -89,7 +107,7 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		Browser:     ptrString(browserStr),
 		UserAgent:   ptrString(uaString),
 		OS:          ptrString(osStr),
-		Status:      "approved",
+		Status:      utils.GetCommentStatus(),
 	}
 
 	// 4. 写入数据库

@@ -10,6 +10,9 @@ const ALLOWED_SETTINGS = new Set([
   "smtp_host", "smtp_port", "email_user", "email_password", "email_secure",
   "allow_origin", "email_enabled",
   "reply_template", "notification_template",
+  "comment_auto_approve",
+  "ip_blacklist",
+  "email_blacklist",
 ]);
 
 export const getSettings = async (c: Context<{ Bindings: Bindings }>) => {

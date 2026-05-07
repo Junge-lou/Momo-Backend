@@ -122,7 +122,9 @@ const pageTitle = computed(() => {
     '/users': '用户列表',
     '/user-comments': '用户评论',
     '/settings': '系统设置',
-    '/settings/site': '站点设置',
+    '/settings/basic': '基本设置',
+    '/settings/email': '邮件通知',
+    '/settings/security': '安全设置',
     '/settings/account': '账户安全',
     '/settings/data': '数据管理',
   };

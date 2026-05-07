@@ -34,6 +34,20 @@
     }
     ```
 
+**状态码**
+
+常见状态码及含义如下：
+
+| 状态码 | 说明 | 典型场景 |
+| --- | --- | --- |
+| 200 | 请求成功 | 操作成功 |
+| 400 | 请求参数错误 | 缺少必填字段、格式不正确等 |
+| 401 | 未授权 | 未携带 Token 或 Token 失效 |
+| 403 | 禁止访问 | IP 被封禁、IP/邮箱在黑名单中、登录失败次数过多 |
+| 404 | 资源不存在 | 资源不存在场景 |
+| 429 | 请求过于频繁 | 评论频率超过限制 |
+| 500 | 服务器内部错误 | 未捕获异常、数据库错误等 |
+
 ## 用户接口
 
 ### 提交评论（POST `/api/comments`）
@@ -73,6 +87,20 @@
   "message": "Time limit exceeded"
 }
 ```
+```json
+{
+  "code": 403,
+  "message": "Your IP has been blocked"
+}
+```
+```json
+{
+  "code": 403,
+  "message": "Your email has been blocked"
+}
+```
+
+> 当 `comment_auto_approve` 设为 `"false"` 时，评论提交后状态为 `"pending"`，需在管理后台审核通过后才会公开显示。
 
 ### 获取评论（GET `/api/comments`）
 
@@ -229,7 +257,10 @@
     "email_secure": "true",
     "email_enabled": "true",
     "reply_template": "",
-    "notification_template": ""
+    "notification_template": "",
+    "comment_auto_approve": "true",
+    "ip_blacklist": "[\"192.168.1.100\",\"10.0.0.0/8\"]",
+    "email_blacklist": "[\"spam@example.com\"]"
   }
 }
 ```
@@ -263,13 +294,21 @@
   "allow_origin": "https://myblog.com",
   "email_enabled": "true",
   "reply_template": "<div>Hi {{toName}}，<br>{{replyAuthor}} 回复了你：{{replyContent}}</div>",
-  "notification_template": "<div>{{commentAuthor}} 评论了 {{postTitle}}：{{commentContent}}</div>"
+  "notification_template": "<div>{{commentAuthor}} 评论了 {{postTitle}}：{{commentContent}}</div>",
+  "comment_auto_approve": "false",
+  "ip_blacklist": "[\"192.168.1.100\",\"10.0.0.0/8\"]",
+  "email_blacklist": "[\"spam@example.com\"]"
 }
 ```
 
 > **邮件模板可用占位符**：
 > - 回复模板：`{{toName}}` `{{replyAuthor}}` `{{postTitle}}` `{{parentComment}}` `{{replyContent}}` `{{postUrl}}`
 > - 通知模板：`{{postTitle}}` `{{commentAuthor}}` `{{commentContent}}` `{{postUrl}}`
+
+> **新字段说明**：
+> - `comment_auto_approve`：评论自动通过开关，`"true"` 表示评论直接显示，`"false"` 表示评论需审核
+> - `ip_blacklist`：IP 黑名单，JSON 数组格式，支持单个 IP 和 CIDR 网段（如 `"192.168.1.0/24"`）
+> - `email_blacklist`：邮箱黑名单，JSON 数组格式，精确匹配邮箱地址
 
 **响应（成功）**：
 ```json

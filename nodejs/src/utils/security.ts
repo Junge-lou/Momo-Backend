@@ -96,3 +96,50 @@ export function extractToken(authHeader: string): string {
     // 否则直接返回 header 值
     return authHeader;
 }
+
+// ---- IP 黑名单和评论审核 ----
+import { getSetting } from "./settings";
+
+function ipInCIDR(ip: string, cidr: string): boolean {
+  const [range, bits = "32"] = cidr.split("/");
+  const prefixLen = parseInt(bits);
+  const mask = ~(2 ** (32 - prefixLen) - 1);
+
+  const ipNum = ip.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct), 0);
+  const rangeNum = range.split(".").reduce((acc, oct) => (acc << 8) + parseInt(oct), 0);
+
+  return (ipNum & mask) >>> 0 === (rangeNum & mask) >>> 0;
+}
+
+export async function checkIpBlacklist(ip: string): Promise<boolean> {
+  const blacklistStr = await getSetting("ip_blacklist");
+  if (!blacklistStr) return false;
+  try {
+    const blacklist = JSON.parse(blacklistStr);
+    if (!Array.isArray(blacklist)) return false;
+    return blacklist.some((entry: string) => {
+      if (entry.includes("/")) {
+        return ipInCIDR(ip, entry);
+      }
+      return ip === entry;
+    });
+  } catch {
+    return false;
+  }
+}
+
+export async function checkEmailBlacklist(email: string): Promise<boolean> {
+  const blacklistStr = await getSetting("email_blacklist");
+  if (!blacklistStr) return false;
+  try {
+    const blacklist = JSON.parse(blacklistStr);
+    return Array.isArray(blacklist) && blacklist.includes(email);
+  } catch {
+    return false;
+  }
+}
+
+export async function getCommentStatus(): Promise<string> {
+  const autoApprove = await getSetting("comment_auto_approve");
+  return autoApprove === "false" ? "pending" : "approved";
+}

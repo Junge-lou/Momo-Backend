@@ -18,8 +18,8 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
   // 检查IP是否被阻止
   if (isIPBlocked(ip)) {
     ctx.status = 403;
-    ctx.body = { 
-      code: 400,
+    ctx.body = {
+      code: 403,
       message: "IP is blocked due to multiple failed login attempts"
     };
     LogService.warn("Blocked IP attempted to login", { ip: ip });
@@ -31,16 +31,16 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
   if(!await checkAdminCredentials(data.name, data.password)) {
     const isBlocked = recordFailedAttempt(ip);
     ctx.status = 401;
-    ctx.body = { 
-      code: 400,
-      message: "Invalid username or password" 
+    ctx.body = {
+      code: 401,
+      message: "Invalid username or password"
     };
     LogService.warn("Login failed", { ip: ip, failedAttempts: recordFailedAttempt });
     if (isBlocked) {
       ctx.status = 403;
-      ctx.body = { 
-        code: 400,
-        message: "IP is blocked due to multiple failed login attempts" 
+      ctx.body = {
+        code: 403,
+        message: "IP is blocked due to multiple failed login attempts"
       };
     }
     return;

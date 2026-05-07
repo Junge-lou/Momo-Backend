@@ -12,6 +12,9 @@ const ALLOWED_SETTINGS = [
   "smtp_host", "smtp_port", "email_user", "email_password", "email_secure",
   "allow_origin", "email_enabled",
   "reply_template", "notification_template",
+  "comment_auto_approve",
+  "ip_blacklist",
+  "email_blacklist",
 ];
 
 function checkAuth(ctx: koa.Context): boolean {

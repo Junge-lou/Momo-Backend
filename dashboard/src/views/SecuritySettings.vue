@@ -1,0 +1,264 @@
+<template>
+  <AdminLayout :baseUrl="apiUrl" @logout="logout" @refresh="loadSettings">
+    <div class="max-w-4xl mx-auto space-y-8">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <router-link to="/settings"
+            class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-200 text-gray-500 transition-colors">
+            <i class="fa-solid fa-arrow-left"></i>
+          </router-link>
+          <h1 class="text-2xl font-bold text-gray-800">安全设置</h1>
+        </div>
+        <div class="flex items-center gap-3">
+          <span v-if="saved" class="text-sm text-green-600 font-medium">保存成功</span>
+          <button @click="saveSettings" :disabled="loading"
+            class="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors text-sm font-medium">
+            {{ loading ? '保存中...' : '保存设置' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- CORS 跨域设置 -->
+      <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-earth-americas text-orange-500"></i> 跨域设置 (CORS)
+        </h2>
+        <p class="text-sm text-gray-500 mb-4">设置允许访问 API 的跨域来源，多个域名用逗号分隔。</p>
+        <div class="flex flex-wrap gap-2 mb-2 min-h-[28px]">
+          <span v-for="(origin, index) in originList" :key="index"
+            class="inline-flex items-center gap-1 px-3 py-1 bg-orange-50 border border-orange-200 text-orange-700 rounded-full text-sm">
+            {{ origin }}
+            <button @click="removeOrigin(index)" class="hover:text-red-500 transition-colors leading-none">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </span>
+        </div>
+        <div class="flex gap-2">
+          <input v-model="newOrigin" type="text" placeholder="https://example.com" @keydown.enter.prevent="addOrigin"
+            class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent text-sm" />
+          <button @click="addOrigin" :disabled="!newOrigin.trim()"
+            class="px-4 py-2 bg-orange-50 text-orange-700 border border-orange-200 rounded-lg hover:bg-orange-100 disabled:opacity-50 transition-colors text-sm font-medium">
+            添加
+          </button>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">输入域名后按回车或点击"添加"，点击标签上的 × 可删除</p>
+      </section>
+
+      <!-- IP 黑名单 -->
+      <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-ban text-red-500"></i> IP 黑名单
+        </h2>
+        <p class="text-sm text-gray-500 mb-4">
+          被加入黑名单的 IP 地址将无法提交评论。支持单个 IP（如 <code class="bg-gray-100 px-1.5 rounded text-gray-600 text-xs">192.168.1.1</code>）和 IP 段（如 <code class="bg-gray-100 px-1.5 rounded text-gray-600 text-xs">10.0.0.0/8</code>）。
+        </p>
+
+        <div class="space-y-2 mb-4">
+          <div v-for="(entry, index) in ipBlacklist" :key="index"
+            class="flex items-center justify-between px-4 py-2.5 bg-gray-50 rounded-lg border border-gray-200">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-network-wired text-gray-400 text-sm"></i>
+              <span class="text-sm font-mono text-gray-700">{{ entry }}</span>
+            </div>
+            <button @click="removeIpEntry(index)"
+              class="text-red-500 hover:text-red-700 transition-colors text-sm">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+          <div v-if="ipBlacklist.length === 0" class="text-sm text-gray-400 py-3 text-center">
+            暂无 IP 黑名单条目
+          </div>
+        </div>
+
+        <div class="flex gap-2">
+          <input v-model="newIpEntry" type="text" placeholder="192.168.1.1 或 10.0.0.0/8" @keydown.enter.prevent="addIpEntry"
+            class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent text-sm font-mono" />
+          <button @click="addIpEntry" :disabled="!newIpEntry.trim()"
+            class="px-4 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors text-sm font-medium whitespace-nowrap">
+            添加
+          </button>
+        </div>
+      </section>
+
+      <!-- 邮箱黑名单 -->
+      <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-envelope-circle-check text-red-500"></i> 邮箱黑名单
+        </h2>
+        <p class="text-sm text-gray-500 mb-4">
+          被加入黑名单的邮箱将无法提交评论。输入完整邮箱地址进行精确匹配。
+        </p>
+
+        <div class="space-y-2 mb-4">
+          <div v-for="(entry, index) in emailBlacklist" :key="index"
+            class="flex items-center justify-between px-4 py-2.5 bg-gray-50 rounded-lg border border-gray-200">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-at text-gray-400 text-sm"></i>
+              <span class="text-sm font-mono text-gray-700">{{ entry }}</span>
+            </div>
+            <button @click="removeEmailEntry(index)"
+              class="text-red-500 hover:text-red-700 transition-colors text-sm">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+          <div v-if="emailBlacklist.length === 0" class="text-sm text-gray-400 py-3 text-center">
+            暂无邮箱黑名单条目
+          </div>
+        </div>
+
+        <div class="flex gap-2">
+          <input v-model="newEmailEntry" type="email" placeholder="spam@example.com" @keydown.enter.prevent="addEmailEntry"
+            class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent text-sm" />
+          <button @click="addEmailEntry" :disabled="!newEmailEntry.trim()"
+            class="px-4 py-2 bg-red-50 text-red-700 border border-red-200 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors text-sm font-medium whitespace-nowrap">
+            添加
+          </button>
+        </div>
+      </section>
+    </div>
+  </AdminLayout>
+</template>
+
+<script setup>
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter, onBeforeRouteLeave } from 'vue-router'
+import request from '../utils/request'
+import toast from '../utils/toast'
+import AdminLayout from '../components/AdminLayout.vue'
+
+const router = useRouter()
+const apiUrl = ref(localStorage.getItem('apiUrl') || window.location.origin)
+
+const loading = ref(false)
+const saved = ref(false)
+
+const ipBlacklist = ref([])
+const emailBlacklist = ref([])
+const newIpEntry = ref('')
+const newEmailEntry = ref('')
+
+const originList = ref([])
+const newOrigin = ref('')
+
+const addOrigin = () => {
+  const val = newOrigin.value.trim()
+  if (val && !originList.value.includes(val)) {
+    originList.value.push(val)
+  }
+  newOrigin.value = ''
+}
+
+const removeOrigin = (index) => {
+  originList.value.splice(index, 1)
+}
+
+const addIpEntry = () => {
+  const val = newIpEntry.value.trim()
+  if (val && !ipBlacklist.value.includes(val)) {
+    ipBlacklist.value.push(val)
+  }
+  newIpEntry.value = ''
+}
+
+const removeIpEntry = (index) => {
+  ipBlacklist.value.splice(index, 1)
+}
+
+const addEmailEntry = () => {
+  const val = newEmailEntry.value.trim()
+  if (val && !emailBlacklist.value.includes(val)) {
+    emailBlacklist.value.push(val)
+  }
+  newEmailEntry.value = ''
+}
+
+const removeEmailEntry = (index) => {
+  emailBlacklist.value.splice(index, 1)
+}
+
+const isDirty = ref(false)
+let initialSnapshot = ''
+
+const takeSnapshot = () => JSON.stringify({ ipList: [...ipBlacklist.value], emailList: [...emailBlacklist.value], origins: [...originList.value] })
+
+watch([ipBlacklist, emailBlacklist, originList], () => {
+  isDirty.value = takeSnapshot() !== initialSnapshot
+}, { deep: true })
+
+onBeforeRouteLeave((to, from, next) => {
+  if (isDirty.value) {
+    const answer = window.confirm('有未保存的修改，确定要离开吗？')
+    if (!answer) { next(false); return }
+  }
+  next()
+})
+
+const handleBeforeUnload = (e) => {
+  if (isDirty.value) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', handleBeforeUnload))
+
+const loadSettings = async () => {
+  try {
+    const res = await request.get('/admin/settings')
+    if (res.code === 200 && res.data) {
+      try {
+        ipBlacklist.value = res.data.ip_blacklist ? JSON.parse(res.data.ip_blacklist) : []
+        if (!Array.isArray(ipBlacklist.value)) ipBlacklist.value = []
+      } catch {
+        ipBlacklist.value = []
+      }
+      try {
+        emailBlacklist.value = res.data.email_blacklist ? JSON.parse(res.data.email_blacklist) : []
+        if (!Array.isArray(emailBlacklist.value)) emailBlacklist.value = []
+      } catch {
+        emailBlacklist.value = []
+      }
+      originList.value = res.data.allow_origin
+        ? res.data.allow_origin.split(',').map(s => s.trim()).filter(Boolean)
+        : []
+    }
+  } catch (e) {
+    console.error('Failed to load settings:', e)
+  }
+  initialSnapshot = takeSnapshot()
+  isDirty.value = false
+}
+
+onMounted(() => {
+  loadSettings()
+})
+
+const saveSettings = async () => {
+  loading.value = true
+  saved.value = false
+  try {
+    const payload = {
+      allow_origin: originList.value.join(','),
+      ip_blacklist: JSON.stringify(ipBlacklist.value),
+      email_blacklist: JSON.stringify(emailBlacklist.value),
+    }
+    const res = await request.put('/admin/settings', payload)
+    if (res.code === 200) {
+      saved.value = true
+      toast.success('安全设置已保存')
+      initialSnapshot = takeSnapshot()
+      isDirty.value = false
+      setTimeout(() => { saved.value = false }, 3000)
+    }
+  } catch (e) {
+    console.error('Failed to save settings:', e)
+  } finally {
+    loading.value = false
+  }
+}
+
+const logout = () => {
+  localStorage.removeItem('token')
+  router.push('/login')
+}
+</script>

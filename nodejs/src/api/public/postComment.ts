@@ -3,7 +3,7 @@ import { UAParser } from "ua-parser-js";
 import CommentService  from "../../orm/commentService";
 import { Comment, CreateCommentInput } from "../../type/prisma"
 import { sendCommentReplyNotification, sendCommentNotification, isEmailServiceAvailable } from "../../utils/email";
-import { canPostComment, checkContent, sanitizeHtml } from "../../utils/security"
+import { canPostComment, checkContent, sanitizeHtml, checkIpBlacklist, checkEmailBlacklist, getCommentStatus } from "../../utils/security"
 import { parseMarkdown } from "../../utils/markdown"
 import LogService from "../../utils/log";
 
@@ -14,12 +14,28 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
             ctx.ip;
   // 检查评论时间
   if(!await canPostComment(ip)) {
+    ctx.status = 429;
     ctx.body = {
-      code: 400,
+      code: 429,
       message: "Time limit exceeded"
     };
     return;
   }
+
+  // 检查 IP 黑名单
+  if (await checkIpBlacklist(ip)) {
+    ctx.status = 403;
+    ctx.body = { code: 403, message: "Your IP has been blocked" };
+    return;
+  }
+
+  // 检查邮箱黑名单
+  if (data.email && await checkEmailBlacklist(data.email)) {
+    ctx.status = 403;
+    ctx.body = { code: 403, message: "Your email has been blocked" };
+    return;
+  }
+
   // 对所有用户输入进行 XSS 检查
     const content = checkContent(data.content);
     const author = checkContent(data.author);
@@ -42,7 +58,7 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
       content_text: content,
       content_html: sanitizeHtml(parseMarkdown(content)),
       parent_id: data.parent_id ?? null,
-      status: "approved"
+      status: await getCommentStatus()
     }
     const comment = await CommentService.createComment(commentData);
     // 发送邮件通知（不影响评论结果）

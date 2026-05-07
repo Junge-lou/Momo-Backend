@@ -37,9 +37,25 @@ const routes = [
     meta: { requiresAuth: true }
   },
   {
+    path: '/settings/basic',
+    name: 'BasicSettings',
+    component: () => import('../views/BasicSettings.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
     path: '/settings/site',
-    name: 'SiteSettings',
-    component: () => import('../views/SiteSettings.vue'),
+    redirect: '/settings/basic'
+  },
+  {
+    path: '/settings/email',
+    name: 'EmailSettings',
+    component: () => import('../views/EmailSettings.vue'),
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/settings/security',
+    name: 'SecuritySettings',
+    component: () => import('../views/SecuritySettings.vue'),
     meta: { requiresAuth: true }
   },
   {

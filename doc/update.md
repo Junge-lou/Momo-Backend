@@ -24,6 +24,13 @@
 
 **需要升级的文件**包括 `package.json`、`pnpm-lock.yml`、`src` 、 `schemas` 和 `public` 文件夹下的所有文件。
 
+升级完成后运行下面的命令推送到 Worker
+
+```bash
+pnpm wrangler login
+pnpm run deploy
+```
+
 如果升级后发现问题，请检查数据库是否添加了新的表。如果添加，请前往 Cloudflare Worker 的 D1 数据库控制台，执行新添加的 SQL 语句。SQL 语句在 `worker/schemas/comment.sql` 文件中。
 
 ![D1](./images/D1-console.jpg)

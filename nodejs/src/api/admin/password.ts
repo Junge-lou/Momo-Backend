@@ -30,7 +30,7 @@ export default async (ctx: koa.Context) => {
   const valid = await checkAdminCredentials(old_name, old_password);
   if (!valid) {
     ctx.status = 401;
-    ctx.body = { code: 400, message: "Current credentials are incorrect" };
+    ctx.body = { code: 401, message: "Current credentials are incorrect" };
     return;
   }
 

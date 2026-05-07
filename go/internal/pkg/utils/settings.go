@@ -1,7 +1,9 @@
 package utils
 
 import (
+	"encoding/json"
 	"fmt"
+	"net"
 	"sync"
 
 	"github.com/jmoiron/sqlx"
@@ -32,6 +34,9 @@ var allowedSettings = map[string]bool{
 	"email_enabled":         true,
 	"reply_template":        true,
 	"notification_template": true,
+	"comment_auto_approve":  true,
+	"ip_blacklist":          true,
+	"email_blacklist":       true,
 }
 
 func InitSettingsDB(db *sqlx.DB) {
@@ -145,4 +150,54 @@ func GetTemplate(key, fallback string) string {
 		return fallback
 	}
 	return t
+}
+
+// CheckIPBlacklist 检查 IP 是否在黑名单中（支持 CIDR）
+func CheckIPBlacklist(ip string) bool {
+	raw := GetSetting("ip_blacklist")
+	if raw == "" {
+		return false
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return false
+	}
+	for _, entry := range list {
+		if entry == ip {
+			return true
+		}
+		if _, cidr, err := net.ParseCIDR(entry); err == nil {
+			if cidr.Contains(net.ParseIP(ip)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// CheckEmailBlacklist 检查邮箱是否在黑名单中
+func CheckEmailBlacklist(email string) bool {
+	raw := GetSetting("email_blacklist")
+	if raw == "" {
+		return false
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return false
+	}
+	for _, entry := range list {
+		if entry == email {
+			return true
+		}
+	}
+	return false
+}
+
+// GetCommentStatus 根据设置返回评论状态（pending/approved）
+func GetCommentStatus() string {
+	val := GetSetting("comment_auto_approve")
+	if val == "false" {
+		return "pending"
+	}
+	return "approved"
 }
