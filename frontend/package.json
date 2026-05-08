@@ -1,6 +1,6 @@
 {
   "name": "@motues/momo-comment",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "description": "Momo frontend comment component built using Svelte",
   "type": "module",
   "main": "./dist/momo-comment.min.js",

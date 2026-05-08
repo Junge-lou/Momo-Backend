@@ -6,6 +6,7 @@
         <img src="https://img.shields.io/badge/Node->=22-green" alt="Node">
         <img src="https://img.shields.io/badge/Cloudflare-Worker-orange?logo=cloudflare" alt="Cloudflare Worker">
         <img src="https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white" alt="Go">
+        <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
     </p>
     <p>
         <img src="https://img.shields.io/badge/SQLite-3E8E41?logo=sqlite&logoColor=white" alt="SQLite">
@@ -51,15 +52,35 @@ Momo Backend 包含前端和后端两个模块，需要分别进行部署。
 
 #### API 应用
 
-API 应用基于 SQLite 数据库，对外提供 RESTful API，目前提供三种部署方式：
+API 应用基于 SQLite 数据库，对外提供 RESTful API，目前提供四种部署方式：
 
+* **Docker 版本** — 一键部署，推荐方式
 * **Node.js 版本** — 基于 Koa 3 + Prisma，适合有 Node.js 环境的服务器
 * **Go 版本** — 编译为单二进制文件，部署简单性能优异
 * **Cloudflare Worker 版本** — 基于 Hono + D1 + KV，无需服务器
 
-> 后续计划提供 Vercel 版本。如需其他平台的部署支持，欢迎提交 Issue。
+> 如需其他平台的部署支持，欢迎提交 Issue。
 
-具体部署方式请参考对应文档：[Node.js](./nodejs/README.md) · [Go](./go/README.md) · [Cloudflare Worker](./worker/README.md)
+具体部署方式请参考对应文档：[Docker](#docker-部署) · [Node.js](./nodejs/README.md) · [Go](./go/README.md) · [Cloudflare Worker](./worker/README.md)
+
+#### Docker 部署
+
+Go 版本支持 Docker 一键部署，镜像发布在 GitHub Container Registry。
+
+```bash
+# 使用 docker-compose（推荐）
+curl -fsSLO https://raw.githubusercontent.com/Motues/Momo-backend/main/docker-compose.yml
+docker compose up -d
+
+# 或直接运行
+docker run -d \
+  --name momo-backend \
+  -p 3000:3000 \
+  -v momo-data:/app/data \
+  ghcr.io/motues/momo-backend:latest
+```
+
+启动后访问 `http://localhost:3000`，默认管理员账号密码均为 `momo`。
 
 #### 管理面板
 
@@ -105,7 +126,6 @@ API 应用基于 SQLite 数据库，对外提供 RESTful API，目前提供三�
 ## 开发计划
 
 - [ ] 支持其他评论系统的数据迁移（Twikoo、Valine 等）
-- [ ] 提供 Docker 一键部署
 
 > 欢迎提交 Issue 和 PR，共同完善项目。  
 > Made with ❤️ by [Motues](https://wwww.motues.top)

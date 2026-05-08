@@ -6,6 +6,7 @@ Momo Backend Go 是一个基于 Go 语言开发的博客评论系统，使用 Gi
 
 * 拥有一个支持 Linux/Windows 的服务器
 * 不需要任何运行时环境，直接使用编译好的二进制文件
+* 如果使用 Docker 部署，需要安装 Docker 环境
 
 ## 快速部署
 
@@ -63,6 +64,40 @@ PORT: 3000  # server port
 | `邮箱用户名` | SMTP 用户名，**如果不需要邮件服务可以不填** |
 | `邮箱密码` | SMTP 密码，**如果不需要邮件服务可以不填** |
 | `安全连接 (SSL/TLS)` | SMTP 是否使用 SSL，默认为 true |
+
+## Docker 部署
+
+使用 Docker Compose 一键启动：
+
+```yaml
+# docker-compose.yml
+services:
+  momo-backend:
+    image: ghcr.io/motues/momo-backend:latest
+    container_name: momo-backend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    restart: always
+```
+
+```bash
+docker compose up -d
+```
+
+或直接运行容器：
+
+```bash
+docker run -d \
+  --name momo-backend \
+  -p 3000:3000 \
+  -v momo-data:/app/data \
+  ghcr.io/motues/momo-backend:latest
+```
+
+数据目录说明：
+- `/app/data` — 数据库文件，需挂载持久化存储
 
 ## 邮件模板
 
