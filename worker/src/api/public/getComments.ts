@@ -21,6 +21,7 @@ export const getComments = async (c: Context<{ Bindings: Bindings }>) => {
   const placeholderContent = await getSetting(c.env, "placeholder_content") || "";
   const placeholderUrl = await getSetting(c.env, "placeholder_url") || "";
   const adminCommentKey = await getSetting(c.env, "admin_comment_key") || "";
+  const adminCommentKeyEnabled = await getSetting(c.env, "admin_comment_key_enabled") || "false";
   const adminEmailHash = adminEmail ? Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(adminEmail.toLowerCase().trim())))).map(b => b.toString(16).padStart(2, "0")).join("") : "";
 
   try {
@@ -57,6 +58,7 @@ export const getComments = async (c: Context<{ Bindings: Bindings }>) => {
       })
 
       // 对根评论进行分页
+      const rootTotal = rootComments.length
       const paginatedData = rootComments.slice(offset, offset + limit)
       return c.json({
         code: 200,
@@ -66,7 +68,7 @@ export const getComments = async (c: Context<{ Bindings: Bindings }>) => {
           pagination: {
             page,
             limit,
-            totalPage: Math.ceil(allComments.length / limit),
+            totalPage: Math.ceil(rootTotal / limit) || 1,
           },
           blogger_badge_enabled: badgeEnabled,
           blogger_badge_text: badgeText,
@@ -74,7 +76,7 @@ export const getComments = async (c: Context<{ Bindings: Bindings }>) => {
           placeholder_email: placeholderEmail,
           placeholder_content: placeholderContent,
           placeholder_url: placeholderUrl,
-          admin_comment_key_configured: adminCommentKey ? "true" : "false",
+          admin_comment_key_configured: adminCommentKey && adminCommentKeyEnabled === "true" ? "true" : "false",
           admin_email_hash: adminEmailHash,
         }
       })
@@ -97,7 +99,7 @@ export const getComments = async (c: Context<{ Bindings: Bindings }>) => {
           placeholder_email: placeholderEmail,
           placeholder_content: placeholderContent,
           placeholder_url: placeholderUrl,
-          admin_comment_key_configured: adminCommentKey ? "true" : "false",
+          admin_comment_key_configured: adminCommentKey && adminCommentKeyEnabled === "true" ? "true" : "false",
           admin_email_hash: adminEmailHash,
         }
       })

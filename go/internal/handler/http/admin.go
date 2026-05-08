@@ -74,32 +74,58 @@ func (h *CommentHandler) GetSettings(c *gin.Context) {
 	}
 
 	allowedSettings := map[string]bool{
-		"site_name":             true,
-		"admin_email":           true,
-		"admin_name":            true,
-		"smtp_host":             true,
-		"smtp_port":             true,
-		"email_user":            true,
-		"email_password":        true,
-		"email_secure":          true,
-		"allow_origin":          true,
-		"email_enabled":         true,
-		"reply_template":        true,
-		"notification_template": true,
-		"comment_auto_approve":  true,
-		"ip_blacklist":          true,
-		"email_blacklist":       true,
-		"blogger_badge_enabled": true,
-		"blogger_badge_text":    true,
-		"placeholder_name":      true,
-		"placeholder_email":     true,
-		"placeholder_content":   true,
-		"placeholder_url":       true,
-		"admin_comment_key":     true,
+		"site_name":                 true,
+		"admin_email":               true,
+		"admin_name":                true,
+		"smtp_host":                 true,
+		"smtp_port":                 true,
+		"email_user":                true,
+		"email_password":            true,
+		"email_secure":              true,
+		"allow_origin":              true,
+		"email_enabled":             true,
+		"reply_template":            true,
+		"notification_template":     true,
+		"comment_auto_approve":      true,
+		"ip_blacklist":              true,
+		"email_blacklist":           true,
+		"blogger_badge_enabled":     true,
+		"blogger_badge_text":        true,
+		"placeholder_name":          true,
+		"placeholder_email":         true,
+		"placeholder_content":       true,
+		"placeholder_url":           true,
+		"admin_comment_key":         true,
+		"admin_comment_key_enabled": true,
+	}
+
+	// 按模块分组
+	settingsGroups := map[string][]string{
+		"basic":    {"site_name", "admin_email", "comment_auto_approve", "blogger_badge_enabled", "blogger_badge_text", "placeholder_name", "placeholder_email", "placeholder_content", "placeholder_url"},
+		"email":    {"smtp_host", "smtp_port", "email_user", "email_password", "email_secure", "email_enabled", "reply_template", "notification_template"},
+		"security": {"allow_origin", "admin_comment_key", "admin_comment_key_enabled", "ip_blacklist", "email_blacklist"},
+		"account":  {"admin_name"},
+	}
+
+	// 支持按 type 参数过滤
+	typeParam := c.Query("type")
+	var keys []string
+	if typeParam != "" {
+		if groupKeys, ok := settingsGroups[typeParam]; ok {
+			keys = groupKeys
+		} else {
+			keys = nil
+		}
+	}
+	if keys == nil {
+		keys = make([]string, 0, len(allowedSettings))
+		for k := range allowedSettings {
+			keys = append(keys, k)
+		}
 	}
 
 	filtered := make(map[string]string)
-	for key := range allowedSettings {
+	for _, key := range keys {
 		if val, ok := all[key]; ok {
 			if sensitiveKeys[key] {
 				filtered[key] = ""
@@ -130,28 +156,29 @@ func (h *CommentHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	allowedSettings := map[string]bool{
-		"site_name":             true,
-		"admin_email":           true,
-		"admin_name":            true,
-		"smtp_host":             true,
-		"smtp_port":             true,
-		"email_user":            true,
-		"email_password":        true,
-		"email_secure":          true,
-		"allow_origin":          true,
-		"email_enabled":         true,
-		"reply_template":        true,
-		"notification_template": true,
-		"comment_auto_approve":  true,
-		"ip_blacklist":          true,
-		"email_blacklist":       true,
-		"blogger_badge_enabled": true,
-		"blogger_badge_text":    true,
-		"placeholder_name":      true,
-		"placeholder_email":     true,
-		"placeholder_content":   true,
-		"placeholder_url":       true,
-		"admin_comment_key":     true,
+		"site_name":                 true,
+		"admin_email":               true,
+		"admin_name":                true,
+		"smtp_host":                 true,
+		"smtp_port":                 true,
+		"email_user":                true,
+		"email_password":            true,
+		"email_secure":              true,
+		"allow_origin":              true,
+		"email_enabled":             true,
+		"reply_template":            true,
+		"notification_template":     true,
+		"comment_auto_approve":      true,
+		"ip_blacklist":              true,
+		"email_blacklist":           true,
+		"blogger_badge_enabled":     true,
+		"blogger_badge_text":        true,
+		"placeholder_name":          true,
+		"placeholder_email":         true,
+		"placeholder_content":       true,
+		"placeholder_url":           true,
+		"admin_comment_key":         true,
+		"admin_comment_key_enabled": true,
 	}
 
 	for key := range body {
@@ -167,6 +194,10 @@ func (h *CommentHandler) UpdateSettings(c *gin.Context) {
 	smtpChanged := body["smtp_host"] != "" || body["smtp_port"] != "" || body["email_user"] != "" || body["email_password"] != ""
 
 	for key, value := range body {
+		// Bug fix: 邮箱密码为空时不覆盖已有密码
+		if key == "email_password" && value == "" {
+			continue
+		}
 		if err := utils.SetSetting(key, value); err != nil {
 			log.Printf("[ERROR] Failed to update setting %s: %v", key, err)
 		}

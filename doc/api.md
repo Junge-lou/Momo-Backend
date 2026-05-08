@@ -263,11 +263,19 @@
 
 ### 获取系统设置 (GET `/admin/settings`)
 
-> 获取所有可通过网页修改的系统配置项。敏感字段（密码类）返回空字符串。
+> 获取系统配置项。敏感字段（密码类）返回空字符串。支持按模块筛选。
 
-**查询参数**：无
+**查询参数**：
+- `type`：按模块筛选（可选）
+  - `basic` — 基本设置（站点信息、评论审核、博主标识、占位符）
+  - `email` — 邮件通知（SMTP 配置、邮件模板）
+  - `security` — 安全设置（CORS、评论密钥、IP/邮箱黑名单）
+  - `account` — 账户信息（管理员名称）
+  - 不传则返回全部设置（向后兼容）
 
 **响应（成功）**：
+`GET /admin/settings`（返回全部设置）
+
 ```json
 {
   "code": 200,
@@ -293,12 +301,78 @@
     "placeholder_email": "",
     "placeholder_content": "",
     "placeholder_url": "",
-    "admin_comment_key": ""
+    "admin_comment_key": "",
+    "admin_comment_key_enabled": "false"
   }
 }
 ```
 
-> `email_password`、`admin_name`、`admin_comment_key` 等敏感字段始终返回空字符串。
+> `email_password`、`admin_comment_key` 等敏感字段始终返回空字符串。
+
+**模块筛选示例**：
+
+`GET /admin/settings?type=basic`
+```json
+{
+  "code": 200,
+  "message": "Settings fetched",
+  "data": {
+    "site_name": "Momo Blog",
+    "admin_email": "admin@example.com",
+    "comment_auto_approve": "true",
+    "blogger_badge_enabled": "false",
+    "blogger_badge_text": "",
+    "placeholder_name": "",
+    "placeholder_email": "",
+    "placeholder_content": "",
+    "placeholder_url": ""
+  }
+}
+```
+
+`GET /admin/settings?type=email`
+```json
+{
+  "code": 200,
+  "message": "Settings fetched",
+  "data": {
+    "smtp_host": "smtp.example.com",
+    "smtp_port": "465",
+    "email_user": "notify@example.com",
+    "email_password": "",
+    "email_secure": "true",
+    "email_enabled": "true",
+    "reply_template": "",
+    "notification_template": ""
+  }
+}
+```
+
+`GET /admin/settings?type=security`
+```json
+{
+  "code": 200,
+  "message": "Settings fetched",
+  "data": {
+    "allow_origin": "http://localhost:4321,https://example.com",
+    "admin_comment_key": "",
+    "admin_comment_key_enabled": "false",
+    "ip_blacklist": "[\"192.168.1.100\",\"10.0.0.0/8\"]",
+    "email_blacklist": "[\"spam@example.com\"]"
+  }
+}
+```
+
+`GET /admin/settings?type=account`
+```json
+{
+  "code": 200,
+  "message": "Settings fetched",
+  "data": {
+    "admin_name": "momo"
+  }
+}
+```
 
 **响应（失败）**：
 ```json
@@ -330,9 +404,15 @@
   "notification_template": "<div>{{commentAuthor}} 评论了 {{postTitle}}：{{commentContent}}</div>",
   "comment_auto_approve": "false",
   "ip_blacklist": "[\"192.168.1.100\",\"10.0.0.0/8\"]",
-  "email_blacklist": "[\"spam@example.com\"]"
+  "email_blacklist": "[\"spam@example.com\"]",
+  "admin_comment_key_enabled": "true",
+  "admin_comment_key": "my-secret-key"
 }
 ```
+
+> **注意**：
+> - `email_password` 留空时不覆盖已有密码，仅当传入新值时更新
+> - `admin_comment_key_enabled` 控制管理员评论密钥的启用/关闭，关闭时自动清除密钥
 
 > **邮件模板可用占位符**：
 > - 回复模板：`{{toName}}` `{{replyAuthor}}` `{{postTitle}}` `{{parentComment}}` `{{replyContent}}` `{{postUrl}}`

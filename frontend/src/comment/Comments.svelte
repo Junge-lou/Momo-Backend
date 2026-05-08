@@ -3,6 +3,7 @@
   import CommentItem from './CommentItem.svelte';
   import i18nit from '../i18n/translation';
   import { parseMarkdown, validateMarkdown } from '../utils/markdown';
+  import { fly } from 'svelte/transition';
 
   export let postSlug: string;
   export let language: string = 'zh-cn';
@@ -13,9 +14,10 @@
 
   let comments: any[] = [];
   let loading = true;
+  let loadingMore = false;
   let error = '';
   let page = 1;
-  let limit = 20;
+  let limit = 2;
   let hasMore = false;
 
   let bloggerBadgeEnabled = false;
@@ -111,15 +113,34 @@
     return chars <= 2000 && words <= 1000;
   }
 
-  async function loadComments() {
-    loading = true;
+  function countComments(comments: any[]): number {
+    let count = 0;
+    for (const c of comments) {
+      count += 1;
+      if (c.replies && c.replies.length > 0) {
+        count += countComments(c.replies);
+      }
+    }
+    return count;
+  }
+
+  async function loadComments(loadMore = false) {
+    if (loadMore) {
+      loadingMore = true;
+    } else {
+      loading = true;
+    }
     try {
       const res = await fetch(
         `${apiUrl}/api/comments?post_slug=${encodeURIComponent(postSlug)}&nested=true&page=${page}&limit=${limit}`
       );
       if (!res.ok) throw new Error(t('comments.loadFailed'));
       const data = await res.json();
-      comments = data.data.comments;
+      if (page === 1) {
+        comments = data.data.comments;
+      } else {
+        comments = [...comments, ...data.data.comments];
+      }
       hasMore = data.data.pagination.totalPage > page;
       bloggerBadgeEnabled = data.data.blogger_badge_enabled === 'true';
       bloggerBadgeText = data.data.blogger_badge_text || '';
@@ -133,7 +154,11 @@
     } catch (err: any) {
       error = err.message;
     } finally {
-      loading = false;
+      if (loadMore) {
+        loadingMore = false;
+      } else {
+        loading = false;
+      }
     }
   }
 
@@ -296,36 +321,47 @@
 
   <!-- 评论区 -->
   <div class="" id="comments-content">
-    {#if loading}
+    {#if !loadingMore && loading}
       <p data-aos="fade-up" class="text-[var(--text-color)] text-center">{t('comments.loading') || '正在加载评论...'}</p>
     {:else if error}
       <p data-aos="fade-up" class="text-red-500 text-center">{t('comments.loadFailed') || '加载失败：'}{error}</p>
     {:else}
-      <h4 data-aos="fade-up" class="text-[var(--text-color)] text-base font-semibold mb-4">{comments.length} {t('comments.comments')}</h4>
+      <h4 data-aos="fade-up" class="text-[var(--text-color)] text-base font-semibold mb-4">{countComments(comments)} {t('comments.comments')}</h4>
 
       <div class="space-y-6">
         {#each comments as c}
-          <CommentItem {c} {postSlug} {author} {email} {url} {language} {apiUrl}
-            {bloggerBadgeEnabled} {bloggerBadgeText}
-            on:reply={(e) => setReplyingTo(e.detail)}
-            on:cancel={() => setReplyingTo(null)}
-            on:submit={async (e) => {
-              await submitComment(e.detail.parentId, e.detail);
-            }}
-            on:delete={handleCommentDelete}
-            replyingToId={replyingToId}
-            on:userInfoChange={(e) => {
-              author = e.detail.author;
-              email = e.detail.email;
-              url = e.detail.url;
-            }} />
+          <div in:fly={{ y: 24, duration: 400, opacity: 0 }}>
+            <CommentItem {c} {postSlug} {author} {email} {url} {language} {apiUrl}
+              {bloggerBadgeEnabled} {bloggerBadgeText}
+              on:reply={(e) => setReplyingTo(e.detail)}
+              on:cancel={() => setReplyingTo(null)}
+              on:submit={async (e) => {
+                await submitComment(e.detail.parentId, e.detail);
+              }}
+              on:delete={handleCommentDelete}
+              replyingToId={replyingToId}
+              on:userInfoChange={(e) => {
+                author = e.detail.author;
+                email = e.detail.email;
+                url = e.detail.url;
+              }} />
+          </div>
         {/each}
       </div>
 
       {#if hasMore}
-        <div data-aos="fade-up" class="flex justify-center mt-6">
-          <button on:click={() => { page++; loadComments(); }}
-            class="text-indigo-600 hover:underline text-sm">{t('comments.loadMore') || '加载更多'}</button>
+        <div class="flex justify-center mt-8">
+          <button on:click={() => { page++; loadComments(true); }}
+            disabled={loadingMore}
+            class="px-6 py-2.5 rounded-lg border border-[var(--button-border-color)] text-sm font-medium text-[var(--text-color)] bg-transparent hover:bg-[var(--button-hover-bg-color)] hover:border-[var(--link-color)] transition-all duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+            {#if loadingMore}
+              <svg class="animate-spin h-4 w-4 text-[var(--text-color)]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            {/if}
+            {loadingMore ? (t('comments.loading') || '加载中...') : (t('comments.loadMore') || '加载更多')}
+          </button>
         </div>
       {/if}
     {/if}

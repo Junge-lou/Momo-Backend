@@ -18,6 +18,7 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
   const placeholderContent = await getSetting("placeholder_content") || "";
   const placeholderUrl = await getSetting("placeholder_url") || "";
   const adminCommentKey = await getSetting("admin_comment_key") || "";
+  const adminCommentKeyEnabled = await getSetting("admin_comment_key_enabled") || "false";
   const adminEmailHash = adminEmail ? crypto.createHash("sha256").update(adminEmail.toLowerCase().trim()).digest("hex") : "";
 
   if(comments === null) {
@@ -30,15 +31,19 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
   if (nested) {
     // 构建嵌套结构的评论数据
     const nestedComments = await buildNestedComments(comments, adminEmail);
+    // 对根评论进行分页
+    const rootTotal = nestedComments.length;
+    const start = (page - 1) * limit;
+    const paginatedRoots = nestedComments.slice(start, start + limit);
     return {
       code: 200,
       message: "Comments fetched successfully",
       data: {
-        comments: nestedComments,
+        comments: paginatedRoots,
         pagination: {
           page,
           limit,
-          totalPage: Math.ceil(comments.length/limit),
+          totalPage: Math.ceil(rootTotal / limit) || 1,
         },
         blogger_badge_enabled: badgeEnabled,
         blogger_badge_text: badgeText,
@@ -46,13 +51,16 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
         placeholder_email: placeholderEmail,
         placeholder_content: placeholderContent,
         placeholder_url: placeholderUrl,
-        admin_comment_key_configured: adminCommentKey ? "true" : "false",
+        admin_comment_key_configured: adminCommentKey && adminCommentKeyEnabled === "true" ? "true" : "false",
         admin_email_hash: adminEmailHash,
       }
     }
   } else {
-    // 构建平面结构的评论数据
-    const plainComments = await Promise.all(comments.map(async comment => ({
+    // 构建平面结构的评论数据，按页截取
+    const total = comments.length;
+    const start = (page - 1) * limit;
+    const pageComments = comments.slice(start, start + limit);
+    const plainComments = await Promise.all(pageComments.map(async comment => ({
       id: comment.id,
       author: comment.author,
       url: comment.url || undefined,
@@ -72,7 +80,7 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
         pagination: {
           page,
           limit,
-          totalPage: comments.length
+          totalPage: Math.ceil(total / limit) || 1,
         },
         blogger_badge_enabled: badgeEnabled,
         blogger_badge_text: badgeText,
@@ -80,7 +88,7 @@ async (comments: Comment[] | null, page: number, limit: number, nested: boolean)
         placeholder_email: placeholderEmail,
         placeholder_content: placeholderContent,
         placeholder_url: placeholderUrl,
-        admin_comment_key_configured: adminCommentKey ? "true" : "false",
+        admin_comment_key_configured: adminCommentKey && adminCommentKeyEnabled === "true" ? "true" : "false",
         admin_email_hash: adminEmailHash,
       }
     };

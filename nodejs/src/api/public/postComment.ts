@@ -40,8 +40,9 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
   // 管理员评论密钥验证
   const adminEmail = await getSetting("admin_email") || "";
   const adminCommentKey = await getSetting("admin_comment_key") || "";
+  const adminCommentKeyEnabled = await getSetting("admin_comment_key_enabled") || "false";
   let isAdminVerified = false;
-  if (data.email === adminEmail && adminCommentKey) {
+  if (data.email === adminEmail && adminCommentKey && adminCommentKeyEnabled === "true") {
     if (data.admin_key === adminCommentKey) {
       isAdminVerified = true;
     } else {

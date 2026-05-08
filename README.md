@@ -21,46 +21,59 @@
 
 
 
+## 主要功能
+
+- 💬 **多级嵌套评论** — 支持无限层级的树形回复，Markdown 编辑，自动渲染 HTML
+- 🛡️ **安全防护** — IP 封禁、黑名单（IP/邮箱）、XSS 过滤、评论频率限制、管理员评论密钥验证
+- 📧 **邮件通知** — SMTP 配置，新评论及回复自动通知，支持自定义模板
+- 📊 **管理面板** — 评论审核、数据概览统计、用户管理、模块化系统设置
+- ⚡ **多后端支持** — Node.js 、Go 、Cloudflare Worker 三种实现
+- 🔄 **数据管理** — JSON 格式导入/导出，方便备份迁移
+- 🎨 **前端组件** — Svelte 5 构建的轻量评论组件，支持 CDN 引入和自定义占位符
+- 🗄️ **SQLite 存储** — 零配置数据库，无需额外安装数据库服务
+
+
 ## 快速开始
 
 Momo Backend 包含前端和后端两个模块，需要分别进行部署。
 
 ### 前端部署
 
-前端即为评论页面，一般集成在博客、论坛等位置，用于提交并展示评论。该组件 Svelte 进行开发。
+前端即为评论页面，一般集成在博客、论坛等位置，用于提交并展示评论，使用 Svelte 5 开发。
 
-前端可以通过 CDN 引入，也可以自行修改编译成js文件，集成到自己的项目中。具体的部署方式可以参考[frontend](./frontend/README.md)。
+前端可以通过 CDN 引入，也可以自行修改编译成 JS 文件，集成到自己的项目中。具体部署方式参考 [frontend](./frontend/README.md)。
 
-如果需要自己设计前端样式，或集成到已有的评论组件中，可以参考 [API 文档](./doc/api.md)自行开发。
+如果需要自己设计前端样式，或集成到已有的评论组件中，可参考 [API 文档](./doc/api.md) 自行开发。
 
 ### 后端部署
 
-后端用于提供评论存储和评论管理服务，包括后端 API 应用和后端管理页面。
+后端用于提供评论存储和管理服务，包括 API 应用和管理面板。
 
 #### API 应用
 
-API 应用维护了一个 SQLite 数据库，并对外提供 API 接口，目前提供了三种部署方式：
+API 应用基于 SQLite 数据库，对外提供 RESTful API，目前提供三种部署方式：
 
-* 基于 Node.js 开发环境，需要服务器本地部署
-* 基于 Go 开发的二进制文件，需要服务器本地部署
-* 基于 Cloudflare Worker，无需服务器部署
+* **Node.js 版本** — 基于 Koa 3 + Prisma，适合有 Node.js 环境的服务器
+* **Go 版本** — 编译为单二进制文件，部署简单性能优异
+* **Cloudflare Worker 版本** — 基于 Hono + D1 + KV，无需服务器
 
-具体部署方式请访问对应的文档获取具体的部署信息：[Node.js 版本](./nodejs/README.md)，[Go 版本](./go/README.md)，[Cloudflare Worker 版本](./worker/README.md)。
+> 后续计划提供 Vercel 版本。如需其他平台的部署支持，欢迎提交 Issue。
 
-后续会提供Vercel版本；如果需要提供其他平台的部署方式，欢迎提交邮件或者 issue 。
+具体部署方式请参考对应文档：[Node.js](./nodejs/README.md) · [Go](./go/README.md) · [Cloudflare Worker](./worker/README.md)
 
-#### 后端管理面板
+#### 管理面板
 
-提供一个可视化面板对评论数据进行管理，使用 Vue 开发。Release 中默认已集成编译好的静态文件，放在 `./public` 文件夹中，无需再次编译。
+提供可视化面板对评论数据进行管理，基于 Vue 3 构建。
 
-源码位于 `./dashboard` 目录下，可以自行修改页面，并重新编译。
+[Release](https://github.com/Motues/Momo-Backend/releases) 中默认已集成编译好的静态文件（`./public` 目录），部署后可直接访问 `/admin` 路径打开管理面板。
+
+源码位于 `./dashboard` 目录，可自行修改页面样式和功能，修改后执行 `pnpm build` 重新编译。
 
 ## 版本更新
 
-本项目仍处于维护状态，不定期进行更新。如果想要体验到最新功能，请参考[更新文档](./doc/update.md)进行更新。
+项目仍处于维护状态，不定期更新。更新前请参考[更新文档](./doc/update.md)。
 
 ## 界面展示
-
 
 <details>
 <summary>点击查看界面预览</summary>
@@ -82,19 +95,17 @@ API 应用维护了一个 SQLite 数据库，并对外提供 API 接口，目前
 
 </details>
 
-## 其他
+## 相关文档
 
-* [API 文档](./doc/api.md)
-* [数据库表结构](./doc/data_table.md)
-* [Momo 静态博客](https://github.com/Motues/Momo)
+* [API 文档](./doc/api.md) — 完整的接口定义和调用示例
+* [数据库表结构](./doc/data_table.md) — 数据表字段说明
+* [更新文档](./doc/update.md) — 版本升级指南
+* [Momo 静态博客](https://github.com/Motues/Momo) — 配套博客主题
 
-## TODO
+## 开发计划
 
-- [ ] 支持其他评论系统的数据迁移
+- [ ] 支持其他评论系统的数据迁移（Twikoo、Valine 等）
 - [ ] 提供 Docker 一键部署
-- [ ] 完善文档
-- [ ] 优化页面
 
-
-> 欢迎对本仓库提出建议，进行优化
+> 欢迎提交 Issue 和 PR，共同完善项目。  
 > Made with ❤️ by [Motues](https://wwww.motues.top)

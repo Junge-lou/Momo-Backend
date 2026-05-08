@@ -97,8 +97,9 @@ export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
   // 5. 管理员评论密钥验证
   const adminEmail = await getSetting(c.env, "admin_email") || "";
   const adminCommentKey = await getSetting(c.env, "admin_comment_key") || "";
+  const adminCommentKeyEnabled = await getSetting(c.env, "admin_comment_key_enabled") || "false";
   let isAdminVerified = false;
-  if (data.email === adminEmail && adminCommentKey) {
+  if (data.email === adminEmail && adminCommentKey && adminCommentKeyEnabled === "true") {
     if (data.admin_key === adminCommentKey) {
       isAdminVerified = true;
     } else {

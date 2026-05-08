@@ -132,7 +132,7 @@ const validateForm = () => {
 
 onMounted(async () => {
   try {
-    const res = await request.get('/admin/settings')
+    const res = await request.get('/admin/settings', { params: { type: 'account' } })
     if (res.code === 200 && res.data) {
       form.admin_name = res.data.admin_name || ''
     }

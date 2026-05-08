@@ -1,5 +1,5 @@
 import type koa from "koa";
-import { getAllSettings, setSetting } from "../../utils/settings";
+import { getAllSettings, getSetting, setSetting } from "../../utils/settings";
 import { sendTestEmail } from "../../utils/email";
 import { checkKey, extractToken } from "../../utils/security";
 import LogService from "../../utils/log";
@@ -22,7 +22,16 @@ const ALLOWED_SETTINGS = [
   "placeholder_content",
   "placeholder_url",
   "admin_comment_key",
+  "admin_comment_key_enabled",
 ];
+
+// 按模块分组的设置键
+const SETTINGS_GROUPS: Record<string, string[]> = {
+  basic: ["site_name", "admin_email", "comment_auto_approve", "blogger_badge_enabled", "blogger_badge_text", "placeholder_name", "placeholder_email", "placeholder_content", "placeholder_url"],
+  email: ["smtp_host", "smtp_port", "email_user", "email_password", "email_secure", "email_enabled", "reply_template", "notification_template"],
+  security: ["allow_origin", "admin_comment_key", "admin_comment_key_enabled", "ip_blacklist", "email_blacklist"],
+  account: ["admin_name"],
+};
 
 function checkAuth(ctx: koa.Context): boolean {
   const authHeader = ctx.get("Authorization");
@@ -38,10 +47,19 @@ function checkAuth(ctx: koa.Context): boolean {
 export async function getSettings(ctx: koa.Context) {
   if (!checkAuth(ctx)) return;
   const all = await getAllSettings();
+  const type = ctx.query.type as string | undefined;
+
+  // 确定要返回的键列表
+  let keys: string[];
+  if (type && type in SETTINGS_GROUPS) {
+    keys = SETTINGS_GROUPS[type];
+  } else {
+    keys = ALLOWED_SETTINGS;
+  }
 
   // 只返回白名单内的，且屏蔽敏感字段
   const filtered: Record<string, string> = {};
-  for (const key of ALLOWED_SETTINGS) {
+  for (const key of keys) {
     if (key in all) {
       filtered[key] = SENSITIVE_KEYS.includes(key) ? "" : all[key];
     }
@@ -77,6 +95,8 @@ export async function updateSettings(ctx: koa.Context) {
 
   for (const [key, value] of Object.entries(body)) {
     if (value !== undefined && value !== null) {
+      // Bug fix: 邮箱密码为空时不覆盖已有密码
+      if (key === "email_password" && String(value) === "") continue;
       await setSetting(key, String(value));
     }
   }

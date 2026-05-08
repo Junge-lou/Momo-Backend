@@ -2,21 +2,22 @@
 
 ## 表：`Comment`
 
-
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
 | `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 自增 ID |
-| `pub_date` | TEXT | DEFAULT CURRENT_TIMESTAMP | 创建时间 |
+| `pub_date` | TEXT/DATETIME | DEFAULT CURRENT_TIMESTAMP | 创建时间 |
 | `post_slug` | TEXT | NOT NULL | 博客文章唯一标识（如 `/posts/hello-world`） |
 | `author` | TEXT | NOT NULL | 昵称 |
 | `email` | TEXT | NOT NULL | 邮箱（用于 Gravatar，不公开） |
 | `url` | TEXT | — | 个人网站（可为空） |
-| `ip_address` | TEXT | — | 可选：记录 IP 用于反垃圾（需用户同意） |
-| `device` | TEXT | — | 评论来源（如 `Windows 10`） |
+| `ip_address` | TEXT | — | 记录 IP 用于反垃圾 |
+| `device` | TEXT | — | 设备信息（如 `Windows 10`） |
+| `os` | TEXT | — | 操作系统 |
 | `browser` | TEXT | — | 浏览器（如 `Chrome 96.0.4664.110`） |
+| `user_agent` | TEXT | — | 原始 User-Agent（仅 Node.js 版本） |
 | `content_text` | TEXT | NOT NULL | 评论内容（纯文本） |
 | `content_html` | TEXT | NOT NULL | 评论内容（HTML） |
-| `parent_id` | INTEGER | REFERENCES `comments`(`id`) | 回复的父评论 ID（NULL 表示顶级评论） |
+| `parent_id` | INTEGER | REFERENCES `Comment`(`id`) | 回复的父评论 ID（NULL 表示顶级评论） |
 | `status` | TEXT | DEFAULT 'pending' | `pending` / `approved` / `rejected` / `deleted` |
 
 ## 表：`Setting`
@@ -24,5 +25,35 @@
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
 | `key` | TEXT | PRIMARY KEY | 设置项名称 |
-| `value` | TEXT | NOT NULL | 值 |
-| `updated_at` | TEXT | — | 最后更新时间 |
+| `value` | TEXT | NOT NULL | 设置值 |
+| `updated_at` | TEXT/DATETIME | — | 最后更新时间 |
+
+### 常用设置项
+
+| key | 说明 |
+|-----|------|
+| `site_name` | 站点名称 |
+| `admin_email` | 管理员邮箱 |
+| `admin_name` | 管理员用户名 |
+| `admin_password` | 管理员密码（bcrypt 哈希） |
+| `smtp_host` | SMTP 服务器地址 |
+| `smtp_port` | SMTP 端口 |
+| `email_user` | 邮箱用户名 |
+| `email_password` | 邮箱密码 |
+| `email_secure` | 是否使用 SSL/TLS 加密 |
+| `email_enabled` | 是否启用邮件通知 |
+| `reply_template` | 回复通知邮件模板 |
+| `notification_template` | 新评论通知邮件模板 |
+| `comment_auto_approve` | 是否自动审核通过 |
+| `allow_origin` | 允许的跨域来源 |
+| `ip_blacklist` | IP 黑名单（JSON 数组） |
+| `email_blacklist` | 邮箱黑名单（JSON 数组） |
+| `blogger_badge_enabled` | 是否启用博主标识 |
+| `blogger_badge_text` | 博主标识标签文字 |
+| `placeholder_name` | 昵称输入框占位文字 |
+| `placeholder_email` | 邮箱输入框占位文字 |
+| `placeholder_content` | 评论内容输入框占位文字 |
+| `placeholder_url` | 网址输入框占位文字 |
+| `admin_comment_key` | 管理员评论密钥（敏感字段） |
+| `admin_comment_key_enabled` | 是否启用管理员评论密钥 |
+| `password_changed` | 是否已修改默认密码 |

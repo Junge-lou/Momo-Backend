@@ -85,8 +85,9 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 	// 管理员评论密钥验证
 	adminEmail := utils.GetSetting("admin_email")
 	adminCommentKey := utils.GetSetting("admin_comment_key")
+	adminCommentKeyEnabled := utils.GetSetting("admin_comment_key_enabled")
 	isAdminVerified := false
-	if req.Email == adminEmail && adminCommentKey != "" {
+	if req.Email == adminEmail && adminCommentKey != "" && adminCommentKeyEnabled == "true" {
 		if req.AdminKey == adminCommentKey {
 			isAdminVerified = true
 		} else {
@@ -232,8 +233,9 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 	placeholderContent := utils.GetSetting("placeholder_content")
 	placeholderURL := utils.GetSetting("placeholder_url")
 	adminCommentKey := utils.GetSetting("admin_comment_key")
+	adminCommentKeyEnabled := utils.GetSetting("admin_comment_key_enabled")
 	adminCommentKeyConfigured := "false"
-	if adminCommentKey != "" {
+	if adminCommentKey != "" && adminCommentKeyEnabled == "true" {
 		adminCommentKeyConfigured = "true"
 	}
 

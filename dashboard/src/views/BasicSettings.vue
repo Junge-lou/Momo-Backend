@@ -175,7 +175,7 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', handleBeforeUnl
 
 const loadSettings = async () => {
   try {
-    const res = await request.get('/admin/settings')
+    const res = await request.get('/admin/settings', { params: { type: 'basic' } })
     if (res.code === 200 && res.data) {
       Object.assign(form, res.data)
     }

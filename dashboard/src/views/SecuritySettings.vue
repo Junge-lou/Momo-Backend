@@ -52,11 +52,26 @@
         <p class="text-sm text-gray-500 mb-4">
           设置密钥后，博主使用管理员邮箱在前台发表评论时需输入此密钥验证身份，验证通过的评论将直接通过审核。
         </p>
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">评论密钥</label>
-          <input v-model="adminCommentKey" type="password" placeholder="留空则不启用密钥验证"
-            class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm" />
-          <p class="text-xs text-gray-400 mt-1">留空表示不启用，设置后前端使用管理员邮箱评论时需要输入此密钥</p>
+        <div class="space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm font-medium text-gray-700">启用评论密钥</p>
+              <p class="text-xs text-gray-400 mt-1">开启后前台发表管理员评论时需要输入密钥验证</p>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" v-model="adminCommentKeyEnabled" class="sr-only peer">
+              <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+              <span class="ms-3 text-sm font-medium text-gray-700">
+                {{ adminCommentKeyEnabled ? '已启用' : '已禁用' }}
+              </span>
+            </label>
+          </div>
+          <div v-if="adminCommentKeyEnabled">
+            <label class="block text-sm font-medium text-gray-700 mb-1">评论密钥</label>
+            <input v-model="adminCommentKey" type="password" placeholder="输入管理员评论密钥"
+              class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm" />
+            <p class="text-xs text-gray-400 mt-1">关闭开关后密钥将被清除</p>
+          </div>
         </div>
       </section>
 
@@ -153,6 +168,7 @@ const emailBlacklist = ref([])
 const newIpEntry = ref('')
 const newEmailEntry = ref('')
 const adminCommentKey = ref('')
+const adminCommentKeyEnabled = ref(false)
 
 const originList = ref([])
 const newOrigin = ref('')
@@ -196,7 +212,7 @@ const removeEmailEntry = (index) => {
 const isDirty = ref(false)
 let initialSnapshot = ''
 
-const takeSnapshot = () => JSON.stringify({ ipList: [...ipBlacklist.value], emailList: [...emailBlacklist.value], origins: [...originList.value], adminKey: adminCommentKey.value })
+const takeSnapshot = () => JSON.stringify({ ipList: [...ipBlacklist.value], emailList: [...emailBlacklist.value], origins: [...originList.value], adminKey: adminCommentKey.value, keyEnabled: adminCommentKeyEnabled.value })
 
 watch([ipBlacklist, emailBlacklist, originList], () => {
   isDirty.value = takeSnapshot() !== initialSnapshot
@@ -221,9 +237,10 @@ onBeforeUnmount(() => window.removeEventListener('beforeunload', handleBeforeUnl
 
 const loadSettings = async () => {
   try {
-    const res = await request.get('/admin/settings')
+    const res = await request.get('/admin/settings', { params: { type: 'security' } })
     if (res.code === 200 && res.data) {
       adminCommentKey.value = res.data.admin_comment_key || ''
+      adminCommentKeyEnabled.value = res.data.admin_comment_key_enabled === 'true'
       try {
         ipBlacklist.value = res.data.ip_blacklist ? JSON.parse(res.data.ip_blacklist) : []
         if (!Array.isArray(ipBlacklist.value)) ipBlacklist.value = []
@@ -259,7 +276,12 @@ const saveSettings = async () => {
       allow_origin: originList.value.join(','),
       ip_blacklist: JSON.stringify(ipBlacklist.value),
       email_blacklist: JSON.stringify(emailBlacklist.value),
-      admin_comment_key: adminCommentKey.value,
+      admin_comment_key_enabled: adminCommentKeyEnabled.value ? 'true' : 'false',
+    }
+    if (adminCommentKeyEnabled.value && adminCommentKey.value) {
+      payload.admin_comment_key = adminCommentKey.value
+    } else if (!adminCommentKeyEnabled.value) {
+      payload.admin_comment_key = ''
     }
     const res = await request.put('/admin/settings', payload)
     if (res.code === 200) {
