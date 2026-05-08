@@ -166,18 +166,20 @@
   async function submitComment(parentId: number | null = null, replyData: any = null) {
     if (submitting) return;
     
-    let submitAuthor, submitEmail, submitUrl, submitContent;
+    let submitAuthor, submitEmail, submitUrl, submitContent, submitAdminKey;
     
     if (replyData) {
       submitAuthor = replyData.author;
       submitEmail = replyData.email;
       submitUrl = replyData.url;
       submitContent = replyData.content;
+      submitAdminKey = replyData.admin_key;
     } else {
       submitAuthor = author;
       submitEmail = email;
       submitUrl = url;
       submitContent = content;
+      submitAdminKey = adminKey;
     }
 
     if (!submitAuthor || !submitEmail || !submitContent) {
@@ -207,7 +209,7 @@
           parent_id: parentId,
           post_url: window.location.href,
           post_title: postTitle,
-          admin_key: adminKey || undefined,
+          admin_key: submitAdminKey || undefined,
         }),
       });
       const data = await res.json();
@@ -333,7 +335,7 @@
         {#each comments as c}
           <div in:fly={{ y: 24, duration: 400, opacity: 0 }}>
             <CommentItem {c} {postSlug} {author} {email} {url} {language} {apiUrl}
-              {bloggerBadgeEnabled} {bloggerBadgeText}
+              {bloggerBadgeEnabled} {bloggerBadgeText} {adminCommentKeyConfigured} {adminEmailHash}
               on:reply={(e) => setReplyingTo(e.detail)}
               on:cancel={() => setReplyingTo(null)}
               on:submit={async (e) => {

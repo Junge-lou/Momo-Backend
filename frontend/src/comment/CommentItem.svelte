@@ -18,6 +18,8 @@
   export let apiUrl: string;
   export let bloggerBadgeEnabled: boolean = false;
   export let bloggerBadgeText: string = '博主';
+  export let adminCommentKeyConfigured: boolean = false;
+  export let adminEmailHash: string = '';
 
   export let depth: number = 0; // 记录评论的层级，顶层为 0
   export let isFlattened: boolean = false; // 是否处于移动端被"拍平"的状态
@@ -50,11 +52,26 @@
   let replyEmail = '';
   let replyUrl = '';
   let replyContent = '';
+  let replyAdminKey = '';
 
   let replySubmitting = false;
   let replyShowPreview = false;
   let replyPreviewHtml = '';
   let replyMarkdownWarnings: string[] = [];
+
+  $: isAdminEmail = false;
+  $: if (email && adminEmailHash) {
+    sha256(email).then(hash => { isAdminEmail = hash === adminEmailHash; });
+  } else {
+    isAdminEmail = false;
+  }
+
+  async function sha256(str: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(str.toLowerCase().trim());
+    const hash = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
 
   function toggleReplyPreview() {
     if (!replyShowPreview) {
@@ -221,8 +238,10 @@
             url: replyUrl,
             content: replyContent,
             post_url: window.location.href,
+            admin_key: replyAdminKey || undefined,
           });
           replyContent = '';
+          replyAdminKey = '';
         }} class="space-y-3">
           <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
             <div>
@@ -244,6 +263,14 @@
                 class="rounded w-full text-[var(--text-color)] border border-[var(--button-border-color)] focus:outline-none focus:border-[var(--link-color)] text-sm py-1 px-2" />
             </div>
           </div>
+
+          {#if adminCommentKeyConfigured && isAdminEmail}
+            <div>
+              <label for="reply-admin-key-{c.id}" class="block text-xs text-[var(--text-color)] mb-1">管理员验证密钥<span class="text-red-500">*</span></label>
+              <input id="reply-admin-key-{c.id}" type="password" placeholder="请输入管理员评论密钥" bind:value={replyAdminKey}
+                class="rounded w-full text-[var(--text-color)] border border-[var(--button-border-color)] focus:outline-none focus:border-[var(--link-color)] text-sm py-1 px-2" />
+            </div>
+          {/if}
 
           <div>
             {#if replyShowPreview}
@@ -306,6 +333,8 @@
               {language}
               {bloggerBadgeEnabled}
               {bloggerBadgeText}
+              {adminCommentKeyConfigured}
+              {adminEmailHash}
               depth={depth + 1}
               isFlattened={false}
               on:reply={(e) => dispatch('reply', e.detail)}
@@ -330,6 +359,8 @@
               {language}
               {bloggerBadgeEnabled}
               {bloggerBadgeText}
+              {adminCommentKeyConfigured}
+              {adminEmailHash}
               depth={1}
               isFlattened={true}
               parentAuthorName={flatReply._parentName}
