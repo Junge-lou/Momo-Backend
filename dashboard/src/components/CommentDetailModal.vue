@@ -59,7 +59,7 @@
           <div class="text-xs space-y-1">
              <div v-if="comment.url" class="flex items-center text-blue-500/80 hover:text-blue-600 transition-colors">
                <i class="fa-solid fa-link mr-2 scale-75"></i>
-               <a :href="comment.url" target="_blank" class="truncate underline underline-offset-2">{{ comment.url }}</a>
+               <a :href="comment.url" target="_blank" rel="noopener noreferrer" class="truncate underline underline-offset-2">{{ comment.url }}</a>
              </div>
              <div v-if="comment.postUrl" class="flex items-center text-slate-500 hover:text-slate-700 transition-colors">
                <i class="fa-solid fa-file-lines mr-2 scale-75"></i>

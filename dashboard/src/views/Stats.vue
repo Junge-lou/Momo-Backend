@@ -175,7 +175,18 @@ const fetchStats = async (silent = false) => {
     const range = selectedRange.value;
     const res = await request.get(`/admin/stats/overview?range=${range}`);
     if (res.data) {
-      stats.value = res.data;
+      stats.value = {
+        totalComments: 0,
+        totalUsers: 0,
+        totalPosts: 0,
+        statusDistribution: { approved: 0, pending: 0, deleted: 0 },
+        recentComments: [],
+        topCommenters: [],
+        ...res.data,
+        statusDistribution: { approved: 0, pending: 0, deleted: 0, ...res.data.statusDistribution },
+        recentComments: res.data.recentComments || [],
+        topCommenters: res.data.topCommenters || [],
+      };
     }
     if (!silent) loading.value = false;
     await nextTick();
@@ -214,17 +225,17 @@ const initCharts = () => {
   if (trendChartRef.value) {
     if (trendChart) trendChart.dispose();
     trendChart = init(trendChartRef.value);
-    const isMonthly = stats.value.recentComments.length > 0 && stats.value.recentComments[0].date.length === 7;
+    const isMonthly = stats.value.recentComments.length > 0 && stats.value.recentComments[0].date?.length === 7;
     const dates = stats.value.recentComments.map(d => {
-      if (d.date.length === 7) {
+      if (d.date?.length === 7) {
         const parts = d.date.split('-');
         const month = parseInt(parts[1]);
         if (month === 1) return `${parts[0].slice(2)}年`;
         return `${month}月`;
       }
-      return d.date.slice(5);
+      return d.date?.slice(5) || '';
     });
-    const counts = stats.value.recentComments.map(d => d.count);
+    const counts = stats.value.recentComments.map(d => d.count ?? 0);
     trendChart.setOption({
       tooltip: {
         trigger: 'axis',

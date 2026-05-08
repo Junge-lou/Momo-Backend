@@ -115,8 +115,8 @@ const fetchUsers = async (page = 1) => {
   try {
     const res = await request.get('/admin/stats/users', { params: { page, limit: 20 } });
     if (res.data) {
-      users.value = res.data.users;
-      pagination.value = res.data.pagination;
+      users.value = res.data.users || [];
+      pagination.value = res.data.pagination || { page: 1, limit: 20, totalPage: 1 };
     }
   } catch (error) {
     toast.error('加载用户列表失败');

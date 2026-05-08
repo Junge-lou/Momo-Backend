@@ -57,7 +57,8 @@ export async function importComments(ctx: koa.Context) {
       await (CommentsModel as any).create({ data });
       imported++;
     } catch (e: any) {
-      errors.push(`第 ${i + 1} 条导入失败: ${e.message}`);
+      LogService.error(`Import failed for comment #${i + 1}`, e);
+      errors.push(`第 ${i + 1} 条导入失败，请检查数据格式`);
     }
   }
 

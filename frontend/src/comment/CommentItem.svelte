@@ -117,7 +117,7 @@
 
 <div id="comment-{c.id}" data-aos="fade-up" class="flex gap-2 md:gap-3 w-full max-w-full">
   {#if c.url}
-  <a href={c.url} target="_blank" class="w-10 h-10 shrink-0">
+  <a href={c.url} target="_blank" rel="noopener noreferrer" class="w-10 h-10 shrink-0">
     <img src={avatarUrl} alt="avatar" class="w-10 h-10 rounded-full object-cover"/>
   </a>
   {:else}
@@ -127,7 +127,7 @@
   <div class="flex-1 min-w-0">
     <div class="flex items-center flex-wrap gap-x-2 gap-y-1">
       {#if c.url}
-        <a href={c.url} target="_blank" class="font-semibold text-[var(--text-color)] hover:text-[var(--link-color)] transition-colors">
+        <a href={c.url} target="_blank" rel="noopener noreferrer" class="font-semibold text-[var(--text-color)] hover:text-[var(--link-color)] transition-colors">
           {c.author}
         </a>
       {:else}

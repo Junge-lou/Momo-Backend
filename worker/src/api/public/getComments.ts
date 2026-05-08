@@ -36,12 +36,23 @@ export const getComments = async (c: Context<{ Bindings: Bindings }>) => {
     const { results } = await c.env.MOMO_DB.prepare(query).bind(post_slug).all()
 
     // 2. 批量处理头像并格式化，同时标记博主
-    const allComments = await Promise.all(results.map(async (row: any) => ({
-      ...row,
-      avatar: await getCravatar(row.email),
-      replies: [],
-      isBlogger: row.email === adminEmail
-    })))
+    const allComments = await Promise.all((results || []).map(async (row: any) => {
+      try {
+        return {
+          ...row,
+          avatar: await getCravatar(row.email),
+          replies: [],
+          isBlogger: row.email === adminEmail
+        };
+      } catch {
+        return {
+          ...row,
+          avatar: '',
+          replies: [],
+          isBlogger: false
+        };
+      }
+    }))
 
     // 3. 处理嵌套逻辑
     if (nested) {
@@ -105,6 +116,7 @@ export const getComments = async (c: Context<{ Bindings: Bindings }>) => {
       })
     }
   } catch (e: any) {
-    return c.json({ message: e.message }, 500)
+    console.error('getComments error:', e)
+    return c.json({ message: 'Internal server error' }, 500)
   }
 }

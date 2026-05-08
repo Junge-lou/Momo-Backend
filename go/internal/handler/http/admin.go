@@ -284,10 +284,10 @@ func (h *CommentHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
-	if len(req.NewPassword) < 4 {
+	if len(req.NewPassword) < 8 {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "New password must be at least 4 characters",
+			"message": "New password must be at least 8 characters",
 		})
 		return
 	}
@@ -387,7 +387,11 @@ func (h *CommentHandler) ListAllComments(c *gin.Context) {
 func (h *CommentHandler) UpdateCommentStatus(c *gin.Context) {
 	idStr := c.Query("id")
 	status := c.Query("status")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "Invalid id"})
+		return
+	}
 
 	if err := h.Repo.UpdateStatus(c.Request.Context(), id, status); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -634,7 +638,8 @@ func (h *CommentHandler) ImportComments(c *gin.Context) {
 			comment.Status = cData.Status
 		}
 		if err := h.Repo.Create(c.Request.Context(), comment); err != nil {
-			errors = append(errors, "第 "+strconv.Itoa(i+1)+" 条导入失败: "+err.Error())
+			log.Printf("[ERROR] Import failed for comment #%d: %v", i+1, err)
+			errors = append(errors, "第 "+strconv.Itoa(i+1)+" 条导入失败，请检查数据格式")
 			continue
 		}
 		imported++

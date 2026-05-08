@@ -13,9 +13,9 @@ marked.use({
 // Post-markdown sanitization: remove javascript: URLs from links
 export function sanitizeHtml(html: string): string {
   return html
-    .replace(/\s+(?:href|src|action|formaction)\s*=\s*"(?:javascript|vbscript):[^"]*"/gi, ' href="#"')
-    .replace(/\s+(?:href|src|action|formaction)\s*=\s*'(?:javascript|vbscript):[^']*'/gi, " href='#'")
-    .replace(/\s+(?:href|src|action|formaction)\s*=\s*(?:javascript|vbscript):[^\s>"]+/gi, ' href="#"');
+    .replace(/\s+(?:href|src|action|formaction)\s*=\s*"(?:javascript|vbscript|data):[^"]*"/gi, ' href="#"')
+    .replace(/\s+(?:href|src|action|formaction)\s*=\s*'(?:javascript|vbscript|data):[^']*'/gi, " href='#'")
+    .replace(/\s+(?:href|src|action|formaction)\s*=\s*(?:javascript|vbscript|data):[^\s>"]+/gi, ' href="#"');
 }
 
 export function parseMarkdown(content: string): string {

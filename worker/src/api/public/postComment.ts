@@ -69,17 +69,22 @@ export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
   const data = await c.req.json();
   const userAgent = c.req.header('user-agent') || "";
 
-  // 1. 获取 IP (Worker 获取 IP 的标准方式)
+  // 1. 必填字段校验
+  if (!data.post_slug || !data.author || !data.email || !data.content) {
+    return c.json({ code: 400, message: "post_slug, author, email, and content are required" }, 400);
+  }
+
+  // 2. 获取 IP (Worker 获取 IP 的标准方式)
   const ip = c.req.header('cf-connecting-ip') || "127.0.0.1";
 
-  // 2. 检查评论频率控制 (对应 canPostComment)
+  // 3. 检查评论频率控制
   const lastComment = await c.env.MOMO_DB.prepare(
     "SELECT pub_date FROM Comment WHERE ip_address = ? ORDER BY pub_date DESC LIMIT 1"
   ).bind(ip).first<{ pub_date: string }>();
 
   if (lastComment) {
     const lastTime = new Date(lastComment.pub_date).getTime();
-    if (Date.now() - lastTime < 60 * 1000) {
+    if (!isNaN(lastTime) && Date.now() - lastTime < 60 * 1000) {
       return c.json({ code: 429, message: "Time limit exceeded. Please wait." }, 429);
     }
   }

@@ -179,8 +179,8 @@ const fetchComments = async (page = 1) => {
       params: { author: author.value, email: email.value, page }
     });
     if (res.data) {
-      comments.value = res.data.comments;
-      pagination.value = res.data.pagination;
+      comments.value = res.data.comments || [];
+      pagination.value = res.data.pagination || { page: 1, limit: 10, totalPage: 1 };
     }
   } catch (error) {
     toast.error('加载评论失败');

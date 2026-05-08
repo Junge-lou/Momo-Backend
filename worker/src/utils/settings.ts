@@ -28,7 +28,7 @@ export async function getAllSettings(env: Bindings): Promise<Record<string, stri
       "SELECT key, value FROM Settings"
     ).all<{ key: string; value: string }>();
     const map: Record<string, string> = {};
-    for (const row of results) {
+    for (const row of results || []) {
       map[row.key] = row.value;
     }
     return map;

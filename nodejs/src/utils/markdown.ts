@@ -10,8 +10,8 @@ marked.use({
   }
 });
 
-export function parseMarkdown(content: string): string {
+export async function parseMarkdown(content: string): Promise<string> {
   if (!content) return '';
-  const result = marked.parse(content);
+  const result = await marked.parse(content);
   return typeof result === 'string' ? result : '';
 }

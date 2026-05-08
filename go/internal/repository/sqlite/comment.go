@@ -263,6 +263,7 @@ func (r *commentRepo) GetStatsOverview(ctx context.Context, rangeParam string) (
 		ORDER BY count DESC
 		LIMIT 5
 	`)
+	stats.TopCommenters = make([]model.TopCommenter, 0)
 	for _, row := range topRows {
 		stats.TopCommenters = append(stats.TopCommenters, model.TopCommenter{
 			Author:          row.Author,

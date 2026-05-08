@@ -10,9 +10,17 @@ import LogService from "../../utils/log";
 
 export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
   const data = ctx.request.body;
-  const ip = ctx.request.headers['cf-connecting-ip'] as string || ctx.request.headers['x-real-ip'] as string || 
-            (ctx.request.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 
+  const ip = ctx.request.headers['cf-connecting-ip'] as string || ctx.request.headers['x-real-ip'] as string ||
+            (ctx.request.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
             ctx.ip;
+
+  // 必填字段校验
+  if (!data.post_slug || !data.author || !data.email || !data.content) {
+    ctx.status = 400;
+    ctx.body = { code: 400, message: "post_slug, author, email, and content are required" };
+    return;
+  }
+
   // 检查评论时间
   if(!await canPostComment(ip)) {
     ctx.status = 429;
@@ -72,7 +80,7 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
       device: uaResult.device.model || uaResult.device.type || uaResult.device.vendor || "",
       user_agent: ctx.request.header['user-agent'] || "",
       content_text: content,
-      content_html: sanitizeHtml(parseMarkdown(content)),
+      content_html: sanitizeHtml(await parseMarkdown(content)),
       parent_id: data.parent_id ?? null,
       status: isAdminVerified ? "approved" : await getCommentStatus()
     }

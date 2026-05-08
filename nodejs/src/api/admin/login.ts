@@ -35,7 +35,7 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
       code: 401,
       message: "Invalid username or password"
     };
-    LogService.warn("Login failed", { ip: ip, failedAttempts: recordFailedAttempt });
+    LogService.warn("Login failed", { ip, failedAttempts: isBlocked });
     if (isBlocked) {
       ctx.status = 403;
       ctx.body = {

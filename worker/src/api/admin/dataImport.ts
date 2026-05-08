@@ -1,6 +1,8 @@
 import { Context } from 'hono';
 import { Bindings } from '../../bindings';
 import { setSetting } from '../../utils/settings';
+import { checkContent } from '../public/postComment';
+import { parseMarkdown } from '../../utils/markdown';
 
 export const importComments = async (c: Context<{ Bindings: Bindings }>) => {
   const body = await c.req.json<{ comments: Record<string, any>[] }>();
@@ -19,11 +21,11 @@ export const importComments = async (c: Context<{ Bindings: Bindings }>) => {
       if (!item.email) { errors.push(`第 ${i + 1} 条缺少 email`); continue; }
       if (!item.contentText && !item.content_text) { errors.push(`第 ${i + 1} 条缺少 contentText`); continue; }
 
-      const postSlug = item.postSlug || item.post_slug;
-      const author = item.author;
+      const author = checkContent(item.author);
       const email = item.email;
-      const contentText = item.contentText || item.content_text;
-      const contentHtml = item.contentHtml || item.content_html || contentText;
+      const rawContent = item.contentText || item.content_text;
+      const contentText = checkContent(rawContent);
+      const contentHtml = parseMarkdown(rawContent);
       const pubDate = item.pubDate || item.pub_date || new Date().toISOString();
       const status = item.status || 'approved';
       const parentId = item.parentId || item.parent_id || null;
@@ -39,7 +41,8 @@ export const importComments = async (c: Context<{ Bindings: Bindings }>) => {
 
       imported++;
     } catch (e: any) {
-      errors.push(`第 ${i + 1} 条导入失败: ${e.message}`);
+      console.error(`Import failed for comment #${i + 1}:`, e);
+      errors.push(`第 ${i + 1} 条导入失败，请检查数据格式`);
     }
   }
 

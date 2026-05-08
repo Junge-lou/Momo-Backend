@@ -136,10 +136,11 @@
       );
       if (!res.ok) throw new Error(t('comments.loadFailed'));
       const data = await res.json();
+      const newComments = data.data?.comments || [];
       if (page === 1) {
-        comments = data.data.comments;
+        comments = newComments;
       } else {
-        comments = [...comments, ...data.data.comments];
+        comments = [...comments, ...newComments];
       }
       hasMore = data.data.pagination.totalPage > page;
       bloggerBadgeEnabled = data.data.blogger_badge_enabled === 'true';

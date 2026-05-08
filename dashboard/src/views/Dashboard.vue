@@ -63,8 +63,8 @@ const fetchComments = async (page = 1) => {
     }
     const res = await request.get('/admin/comments/list', { params });
     if (res.data) {
-      tableData.value = res.data.comments;
-      pagination.value = res.data.pagination;
+      tableData.value = res.data.comments || [];
+      pagination.value = res.data.pagination || { page: 1, limit: 10, totalPage: 1 };
     }
   } catch (error) {
     toast.error('加载失败');
