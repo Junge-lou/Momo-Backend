@@ -40,10 +40,10 @@ vim ./config/config.yaml
 
 ```yaml
 # ./config/config.yaml
-PORT: 17171  # server port
+PORT: 3000  # server port
 ```
 
-启动成功后，访问 `http://localhost:17171`
+启动成功后，访问 `http://localhost:3000`
 
 ### 3. 修改系统参数
 

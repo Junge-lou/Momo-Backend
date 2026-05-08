@@ -18,7 +18,7 @@ var GlobalConfig *Config
 // DefaultConfig 默认配置
 func DefaultConfig() *Config {
 	return &Config{
-		Port: 17171,
+		Port: 3000,
 	}
 }
 

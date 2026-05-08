@@ -1,0 +1,9 @@
+services:
+  momo-backend:
+    image: ghcr.io/motues/momo-backend:latest
+    container_name: momo-backend
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - data:/app/data      # 数据库文件

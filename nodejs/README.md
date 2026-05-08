@@ -42,7 +42,7 @@ vim .env
 | 变量名 | 说明 | 
 | ------ | ---- | 
 | `NODE_ENV` | 在 development 环境下，没有跨域保护，建议部署到服务器的时候选择 production 环境 | 
-| `PORT` | 端口号，默认为17171 |
+| `PORT` | 端口号，默认为3000 |
 | `DATABASE_URL` | 数据库连接地址 |
 
 #### 3. 编译部署
@@ -69,7 +69,7 @@ cd ../nodejs
 pnpm build # 编译后的文件在 dist 目录下
 pnpm start
 ```
-启动成功后，访问 http://localhost:17171（端口号根据环境变量中的配置为准）
+启动成功后，访问 http://localhost:3000（端口号根据环境变量中的配置为准）
 
 建议使用 `pm2` 管理进程
 
@@ -195,7 +195,7 @@ server {
     server_name api.example.com; # 这里修改为你的域名
 
     location / {
-        proxy_pass http://localhost:17171; # 这里修改为实际端口号
+        proxy_pass http://localhost:3000; # 这里修改为实际端口号
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
