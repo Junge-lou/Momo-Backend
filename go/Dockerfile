@@ -1,10 +1,12 @@
-# Stage 1: Build Go binary
-FROM golang:1.25-alpine AS builder
+# Stage 1: Build Go binary (native platform, cross-compile for target)
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/momo-backend ./main.go
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/momo-backend ./main.go
 
 # Stage 2: Runtime
 FROM alpine:3.21

@@ -17,7 +17,7 @@
   let loadingMore = false;
   let error = '';
   let page = 1;
-  let limit = 2;
+  let limit = 20;
   let hasMore = false;
 
   let bloggerBadgeEnabled = false;
