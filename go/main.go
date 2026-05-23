@@ -24,7 +24,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const Version = "1.3.5"
+const Version = "1.3.6"
 
 func main() {
 
