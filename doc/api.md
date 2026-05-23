@@ -13,6 +13,7 @@
 | PUT | `/admin/password` | 修改管理员凭据 |
 | GET | `/admin/comments/list` | 获取所有评论 |
 | PUT | `/admin/comments/status` | 修改评论状态 |
+| PUT | `/admin/comments/edit` | 修改评论内容 |
 | GET | `/admin/stats/overview` | 统计概览 |
 | GET | `/admin/stats/users` | 用户列表 |
 | GET | `/admin/stats/users/comments` | 用户的评论 |
@@ -543,6 +544,45 @@
 {
   "code": 400,
   "message": "Invalid request parameters"
+}
+```
+
+### 修改评论内容 (PUT `/admin/comments/edit`)
+
+**请求体**：
+```json
+{
+  "id": 123,
+  "author": "新作者名",
+  "email": "new@example.com",
+  "content_text": "修改后的纯文本内容",
+  "content_html": "<p>修改后的HTML内容</p>",
+  "url": "https://example.com"
+}
+```
+
+> `id` 为必填字段，其余字段至少传一个，未传的字段不会被修改。
+
+**响应（成功）**：
+```json
+{
+  "code": 200,
+  "message": "Comment updated"
+}
+```
+
+**响应（失败）**：
+```json
+{
+  "code": 400,
+  "message": "Invalid request parameters"
+}
+```
+
+```json
+{
+  "code": 400,
+  "message": "No fields to update"
 }
 ```
 

@@ -123,12 +123,13 @@
     </div>
 
     <!-- 评论详情弹窗 -->
-    <CommentDetailModal 
-      :visible="showModal" 
+    <CommentDetailModal
+      :visible="showModal"
       :comment="selectedComment"
       @close="closeModal"
       @update="(id, status) => $emit('update', id, status)"
       @delete="(id) => $emit('update', id, 'deleted')"
+      @edit="(payload) => $emit('edit', payload)"
     />
   </div>
 </template>
@@ -139,7 +140,7 @@ import { ref } from 'vue'
 import CommentDetailModal from '../components/CommentDetailModal.vue'
 
 defineProps(['data', 'pagination']);
-defineEmits(['update', 'page-change']);
+defineEmits(['update', 'page-change', 'edit']);
 
 const showModal = ref(false)
 const selectedComment = ref({})

@@ -109,6 +109,22 @@ class CommentService {
         });
     }
     /*
+    * 修改评论内容
+    */
+    async updateComment(id: number, fields: Record<string, any>): Promise<Comment> {
+        const allowed = ['author', 'email', 'content_text', 'content_html', 'url'];
+        const data: Record<string, any> = {};
+        for (const key of allowed) {
+            if (fields[key] !== undefined) {
+                data[key] = fields[key];
+            }
+        }
+        return await CommentsModel.update({
+            where: { id },
+            data
+        });
+    }
+    /*
     * 获取统计概览数据
     */
     async getStatsOverview(range: number = 7) {

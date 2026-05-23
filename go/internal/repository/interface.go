@@ -11,6 +11,7 @@ type CommentRepository interface {
 	GetByPostSlug(ctx context.Context, slug string) ([]*model.Comment, error)
 	List(ctx context.Context, offset, limit int, status string) ([]*model.Comment, int64, error)
 	UpdateStatus(ctx context.Context, id int64, status string) error
+	UpdateComment(ctx context.Context, id int64, fields map[string]interface{}) error
 	Delete(ctx context.Context, id int64) error
 
 	// Stats methods

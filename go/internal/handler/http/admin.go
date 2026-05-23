@@ -407,6 +407,57 @@ func (h *CommentHandler) UpdateCommentStatus(c *gin.Context) {
 	})
 }
 
+// UpdateComment 修改评论内容
+func (h *CommentHandler) UpdateComment(c *gin.Context) {
+	var req struct {
+		ID          int64   `json:"id" binding:"required"`
+		Author      *string `json:"author"`
+		Email       *string `json:"email"`
+		ContentText *string `json:"content_text"`
+		ContentHtml *string `json:"content_html"`
+		URL         *string `json:"url"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "Invalid request parameters"})
+		return
+	}
+
+	fields := make(map[string]interface{})
+	if req.Author != nil {
+		fields["author"] = *req.Author
+	}
+	if req.Email != nil {
+		fields["email"] = *req.Email
+	}
+	if req.ContentText != nil {
+		fields["content_text"] = *req.ContentText
+		// 只改了 content_text 但没传 content_html 时，自动渲染 markdown
+		if req.ContentHtml == nil {
+			fields["content_html"] = utils.ParseMarkdown(*req.ContentText)
+		}
+	}
+	if req.ContentHtml != nil {
+		fields["content_html"] = *req.ContentHtml
+	}
+	if req.URL != nil {
+		fields["url"] = *req.URL
+	}
+	if len(fields) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "No fields to update"})
+		return
+	}
+
+	if err := h.Repo.UpdateComment(c.Request.Context(), req.ID, fields); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "Update failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "Comment updated",
+	})
+}
+
 // GetStatsOverview 统计概览
 func (h *CommentHandler) GetStatsOverview(c *gin.Context) {
 	rangeStr := c.DefaultQuery("range", "7")

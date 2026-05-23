@@ -14,6 +14,12 @@
 
 升级完成后，请执行 `pnpm install` 安装依赖包。
 
+```bash
+pnpm install
+pnpm build
+pnpm start
+```
+
 ### Go
 
 从 [Relase](https://github.com/Motues/Momo/releases) 下载最新二进制文件，替换原有二进制即可，数据库文件无需修改。

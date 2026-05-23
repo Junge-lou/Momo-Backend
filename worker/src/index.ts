@@ -11,6 +11,7 @@ import { getSettings, updateSettings, testEmail } from './api/admin/settings'
 import { changePassword } from './api/admin/password'
 import { listComments } from './api/admin/listComments'
 import { updateStatus } from './api/admin/updateStatus'
+import { updateComment } from './api/admin/updateComment'
 import { statsOverview } from './api/admin/statsOverview'
 import { userList } from './api/admin/userList'
 import { userComments } from './api/admin/userComments'
@@ -38,6 +39,7 @@ app.post('/admin/settings/test-email', testEmail);
 app.put('/admin/password', changePassword);
 app.get('/admin/comments/list', listComments);
 app.put('/admin/comments/status', updateStatus);
+app.put('/admin/comments/edit', updateComment);
 app.get('/admin/stats/overview', statsOverview);
 app.get('/admin/stats/users', userList);
 app.get('/admin/stats/users/comments', userComments);

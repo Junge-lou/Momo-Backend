@@ -144,6 +144,7 @@
       @close="closeModal"
       @update="(id, status) => updateStatus(id, status)"
       @delete="(id) => updateStatus(id, 'deleted')"
+      @edit="editComment"
     />
   </AdminLayout>
 </template>
@@ -196,6 +197,16 @@ const updateStatus = async (id, status) => {
     fetchComments(pagination.value.page);
   } catch (error) {
     toast.error('更新失败');
+  }
+};
+
+const editComment = async (payload) => {
+  try {
+    await request.put('/admin/comments/edit', payload);
+    toast.success('修改成功');
+    fetchComments(pagination.value.page);
+  } catch (error) {
+    toast.error('修改失败');
   }
 };
 

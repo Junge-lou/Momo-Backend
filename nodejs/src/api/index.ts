@@ -3,6 +3,7 @@ import postComment from "./public/postComment";
 
 import getAllComments from "./admin/getAllComments";
 import changeCommentStatus from "./admin/changeCommentStatus";
+import updateComment from "./admin/updateComment";
 import login from "./admin/login";
 import getStatsOverview from "./admin/getStatsOverview";
 import getUserList from "./admin/getUserList";
@@ -13,4 +14,4 @@ import { importComments, importSettings } from "./admin/dataImport";
 import { exportSettings, exportComments } from "./admin/dataExport";
 
 export { getCommentBySlug, postComment };
-export { getAllComments, changeCommentStatus, login, getStatsOverview, getUserList, getUserComments, getSettings, updateSettings, changePassword, testEmail, importComments, importSettings, exportSettings, exportComments };
+export { getAllComments, changeCommentStatus, updateComment, login, getStatsOverview, getUserList, getUserComments, getSettings, updateSettings, changePassword, testEmail, importComments, importSettings, exportSettings, exportComments };

@@ -2,9 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"momo-backend-go/internal/model"
 	"momo-backend-go/internal/repository"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -113,6 +115,34 @@ func (r *commentRepo) UpdateStatus(ctx context.Context, id int64, status string)
 		_, err := r.db.ExecContext(ctx, "UPDATE Comment SET status = ? WHERE id = ?", status, id)
 		return err
 	}
+}
+
+func (r *commentRepo) UpdateComment(ctx context.Context, id int64, fields map[string]interface{}) error {
+	allowed := map[string]string{
+		"author":       "author",
+		"email":        "email",
+		"content_text": "content_text",
+		"content_html": "content_html",
+		"url":          "url",
+	}
+
+	var sets []string
+	var args []interface{}
+	for k, v := range fields {
+		col, ok := allowed[k]
+		if !ok {
+			continue
+		}
+		sets = append(sets, fmt.Sprintf("%s = ?", col))
+		args = append(args, v)
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+	args = append(args, id)
+	query := fmt.Sprintf("UPDATE Comment SET %s WHERE id = ?", strings.Join(sets, ", "))
+	_, err := r.db.ExecContext(ctx, query, args...)
+	return err
 }
 
 func (r *commentRepo) Delete(ctx context.Context, id int64) error {
