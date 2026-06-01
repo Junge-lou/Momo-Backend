@@ -1,25 +1,18 @@
-import type koa from "koa";
-import CommentService  from "../../orm/commentService";
+import type { Context } from "hono";
+import CommentService from "../../orm/commentService";
 import { getQueryNumber, getQueryBoolean, getQueryString } from "../../utils/url";
 import { getResponseComment } from "../../utils/content";
 
+export default async (c: Context): Promise<Response> => {
+  const postSlug = getQueryString(c.req.query("post_slug"), "");
+  const page = getQueryNumber(c.req.query("page"), 1);
+  const limit = getQueryNumber(c.req.query("limit"), 20);
+  const nested = getQueryBoolean(c.req.query("nested"), true);
 
-export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
-    const postSlug =  getQueryString(ctx.query.post_slug as string, "");
-    const page = getQueryNumber(ctx.query.page as string, 1);
-    const limit = getQueryNumber(ctx.query.limit as string, 20);
-    const nested = getQueryBoolean(ctx.query.nested as string, true);
+  if (postSlug === "") {
+    return c.json({ error: "Invalid post_slug" }, 400);
+  }
 
-    // console.log(postSlug);
-    // console.log("有新的查询")
-
-    if (postSlug === "") {
-        ctx.status = 400;
-        ctx.body = { error: "Invalid post_slug" };
-        return;
-    }
-
-    const comments = await CommentService.getCommentBySlug(postSlug);
-    // console.log(comments);
-    ctx.body = await getResponseComment(comments, page, limit, nested);
-}
+  const comments = await CommentService.getCommentBySlug(postSlug);
+  return c.json(await getResponseComment(comments, page, limit, nested));
+};

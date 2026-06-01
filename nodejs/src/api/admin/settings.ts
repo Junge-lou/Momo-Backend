@@ -1,5 +1,5 @@
-import type koa from "koa";
-import { getAllSettings, getSetting, setSetting } from "../../utils/settings";
+import type { Context } from "hono";
+import { getAllSettings, setSetting } from "../../utils/settings";
 import { sendTestEmail } from "../../utils/email";
 import { checkKey, extractToken } from "../../utils/security";
 import LogService from "../../utils/log";
@@ -33,21 +33,21 @@ const SETTINGS_GROUPS: Record<string, string[]> = {
   account: ["admin_name"],
 };
 
-function checkAuth(ctx: koa.Context): boolean {
-  const authHeader = ctx.get("Authorization");
+function checkAuth(c: Context): boolean {
+  const authHeader = c.req.header("Authorization") || "";
   const key = extractToken(authHeader);
   if (!key || !checkKey(key)) {
-    ctx.status = 401;
-    ctx.body = { code: 401, message: "Invalid token" };
     return false;
   }
   return true;
 }
 
-export async function getSettings(ctx: koa.Context) {
-  if (!checkAuth(ctx)) return;
+export async function getSettings(c: Context): Promise<Response> {
+  if (!checkAuth(c)) {
+    return c.json({ code: 401, message: "Invalid token" }, 401);
+  }
   const all = await getAllSettings();
-  const type = ctx.query.type as string | undefined;
+  const type = c.req.query("type");
 
   // 确定要返回的键列表
   let keys: string[];
@@ -69,23 +69,21 @@ export async function getSettings(ctx: koa.Context) {
     filtered.email_enabled = "true";
   }
 
-  ctx.body = { code: 200, message: "Settings fetched", data: filtered };
+  return c.json({ code: 200, message: "Settings fetched", data: filtered });
 }
 
-export async function updateSettings(ctx: koa.Context) {
-  if (!checkAuth(ctx)) return;
-  const body = ctx.request.body as Record<string, string>;
+export async function updateSettings(c: Context): Promise<Response> {
+  if (!checkAuth(c)) {
+    return c.json({ code: 401, message: "Invalid token" }, 401);
+  }
+  const body = await c.req.json() as Record<string, string>;
   if (!body || typeof body !== "object") {
-    ctx.status = 400;
-    ctx.body = { code: 400, message: "Invalid request body" };
-    return;
+    return c.json({ code: 400, message: "Invalid request body" }, 400);
   }
 
   for (const key of Object.keys(body)) {
     if (!ALLOWED_SETTINGS.includes(key) && key !== "admin_password") {
-      ctx.status = 400;
-      ctx.body = { code: 400, message: `Setting "${key}" is not allowed` };
-      return;
+      return c.json({ code: 400, message: `Setting "${key}" is not allowed` }, 400);
     }
   }
 
@@ -103,29 +101,28 @@ export async function updateSettings(ctx: koa.Context) {
 
   LogService.info("Settings updated", Object.keys(body));
 
-  ctx.body = {
+  return c.json({
     code: 200,
     message: "Settings updated. Some changes may require a restart to take full effect.",
     smtpChanged,
-  };
+  });
 }
 
-export async function testEmail(ctx: koa.Context) {
-  if (!checkAuth(ctx)) return;
+export async function testEmail(c: Context): Promise<Response> {
+  if (!checkAuth(c)) {
+    return c.json({ code: 401, message: "Invalid token" }, 401);
+  }
 
   const all = await getAllSettings();
-  const adminEmail = all["admin_email"] || '';
+  const adminEmail = all["admin_email"] || "";
   if (!adminEmail) {
-    ctx.status = 400;
-    ctx.body = { code: 400, message: 'Admin email is not configured. ' };
-    return;
+    return c.json({ code: 400, message: "Admin email is not configured. " }, 400);
   }
 
   try {
     await sendTestEmail(adminEmail);
-    ctx.body = { code: 200, message: 'A test email has been sent' };
+    return c.json({ code: 200, message: "A test email has been sent" });
   } catch (e: any) {
-    ctx.status = 400;
-    ctx.body = { code: 400, message: '邮件发送失败，请检查 SMTP 配置' };
+    return c.json({ code: 400, message: "邮件发送失败，请检查 SMTP 配置" }, 400);
   }
 }

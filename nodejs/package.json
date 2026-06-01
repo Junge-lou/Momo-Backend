@@ -4,34 +4,32 @@
   "description": "",
   "main": "app.js",
   "scripts": {
-    "dev": "npx prisma migrate dev --name add_new_fields && ts-node src/app.ts",
-    "build": "npx prisma migrate dev --name add_new_fields && tsc -p tsconfig.json",
+    "dev": "ts-node src/app.ts",
+    "build": "tsc -p tsconfig.json",
     "deploy": "bash deploy.sh",
-    "start": "node dist/app.js"
+    "start": "node dist/app.js",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push"
   },
   "packageManager": "pnpm@10.15.1",
   "dependencies": {
-    "@koa/bodyparser": "^6.0.0",
-    "@koa/cors": "^5.0.0",
-    "@koa/router": "^14.0.0",
-    "@prisma/client": "^6.18.0",
     "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^11.7.0",
     "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.40.0",
+    "hono": "^4.7.0",
     "isomorphic-dompurify": "^3.12.0",
-    "koa": "^3.0.3",
-    "koa-static": "^5.0.0",
     "marked": "^15.0.0",
     "nodemailer": "^8.0.4",
-    "prisma": "^6.18.0",
-    "ua-parser-js": "^2.0.6"
+    "ua-parser-js": "^2.0.6",
+    "@hono/node-server": "^1.13.0"
   },
   "devDependencies": {
-    "@types/koa": "^3.0.1",
-    "@types/koa-static": "^4.0.4",
-    "@types/koa__cors": "^5.0.1",
-    "@types/koa__router": "^12.0.5",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^24.9.1",
     "@types/nodemailer": "^7.0.11",
+    "drizzle-kit": "^0.30.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }

@@ -1,31 +1,39 @@
-import type koa from "koa";
+import type { Context } from "hono";
 import { getAllSettings } from "../../utils/settings";
-import { CommentsModel } from "../../orm/prisma";
+import { db, schema } from "../../orm/client";
+import { asc } from "drizzle-orm";
 import { checkKey, extractToken } from "../../utils/security";
 import pkg from "../../../package.json";
 
-function checkAuth(ctx: koa.Context): boolean {
-  const authHeader = ctx.get("Authorization");
+function checkAuth(c: Context): boolean {
+  const authHeader = c.req.header("Authorization") || "";
   const key = extractToken(authHeader);
   if (!key || !checkKey(key)) {
-    ctx.status = 401;
-    ctx.body = { code: 401, message: "Invalid token" };
     return false;
   }
   return true;
 }
 
 // 导出系统设置（含 email_password，不含 admin_name/admin_password）
-export async function exportSettings(ctx: koa.Context) {
-  if (!checkAuth(ctx)) return;
+export async function exportSettings(c: Context): Promise<Response> {
+  if (!checkAuth(c)) {
+    return c.json({ code: 401, message: "Invalid token" }, 401);
+  }
 
   const all = await getAllSettings();
 
   const allowList: Record<string, boolean> = {
-    "site_name": true, "admin_email": true,
-    "smtp_host": true, "smtp_port": true, "email_user": true, "email_password": true, "email_secure": true,
-    "allow_origin": true, "email_enabled": true,
-    "reply_template": true, "notification_template": true,
+    site_name: true,
+    admin_email: true,
+    smtp_host: true,
+    smtp_port: true,
+    email_user: true,
+    email_password: true,
+    email_secure: true,
+    allow_origin: true,
+    email_enabled: true,
+    reply_template: true,
+    notification_template: true,
   };
 
   const filtered: Record<string, string> = {};
@@ -38,7 +46,7 @@ export async function exportSettings(ctx: koa.Context) {
     filtered.email_enabled = "true";
   }
 
-  ctx.body = {
+  return c.json({
     code: 200,
     message: "Settings exported",
     data: {
@@ -47,20 +55,24 @@ export async function exportSettings(ctx: koa.Context) {
       version: pkg.version,
       settings: filtered,
     },
-  };
+  });
 }
 
 // 导出评论数据
-export async function exportComments(ctx: koa.Context) {
-  if (!checkAuth(ctx)) return;
+export async function exportComments(c: Context): Promise<Response> {
+  if (!checkAuth(c)) {
+    return c.json({ code: 401, message: "Invalid token" }, 401);
+  }
 
-  const comments = await CommentsModel.findMany({
-    orderBy: { pub_date: "asc" },
-  });
+  const rows = db
+    .select()
+    .from(schema.comments)
+    .orderBy(asc(schema.comments.pub_date))
+    .all();
 
-  const mapped = comments.map((c) => ({
+  const mapped = rows.map((c: any) => ({
     id: c.id,
-    pubDate: c.pub_date.toISOString(),
+    pubDate: new Date(c.pub_date).toISOString(),
     postSlug: c.post_slug,
     author: c.author,
     email: c.email,
@@ -74,7 +86,7 @@ export async function exportComments(ctx: koa.Context) {
     status: c.status,
   }));
 
-  ctx.body = {
+  return c.json({
     code: 200,
     message: "Comments exported",
     data: {
@@ -84,5 +96,5 @@ export async function exportComments(ctx: koa.Context) {
       total: mapped.length,
       comments: mapped,
     },
-  };
+  });
 }

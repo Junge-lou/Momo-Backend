@@ -1,4 +1,4 @@
-import cors from "@koa/cors"
+import { cors } from "hono/cors";
 import { getSetting } from "../utils/settings";
 
 const CheckAllowOrigins = async (requestOrigin: string): Promise<string> => {
@@ -7,7 +7,7 @@ const CheckAllowOrigins = async (requestOrigin: string): Promise<string> => {
   const allowOriginStr = await getSetting("allow_origin");
   if (!allowOriginStr) return "";
 
-  const allowedOrigins = allowOriginStr.split(",").map(s => s.trim()).filter(Boolean);
+  const allowedOrigins = allowOriginStr.split(",").map((s) => s.trim()).filter(Boolean);
 
   if (allowedOrigins.includes("*")) return "*";
   if (allowedOrigins.includes(requestOrigin)) return requestOrigin;
@@ -15,11 +15,10 @@ const CheckAllowOrigins = async (requestOrigin: string): Promise<string> => {
 };
 
 const corsMiddleware = cors({
-    origin: async (ctx) => {
-      const origin = ctx.get("Origin");
-      return CheckAllowOrigins(origin);
-    },
-    credentials: true
+  origin: async (origin, c) => {
+    return CheckAllowOrigins(origin || "");
+  },
+  credentials: true,
 });
 
 export default corsMiddleware;

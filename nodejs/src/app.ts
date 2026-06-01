@@ -1,33 +1,41 @@
 import "dotenv/config";
-import Koa from "koa";
-import bodyParser from "@koa/bodyparser"
-import serve from "koa-static";
+import { serve } from "@hono/node-server";
+import { Hono } from "hono";
+import { serveStatic } from "@hono/node-server/serve-static";
 import path from "path";
+import fs from "fs";
 
-import corsMiddleware  from "./middleware/cors";
-import routerMiddleware from "./middleware/routes";
+import corsMiddleware from "./middleware/cors";
+import router from "./middleware/routes";
 import LogService from "./utils/log";
 
-const app = new Koa();
-app.use(serve(path.join(__dirname, "../public")));
+const app = new Hono();
 
 // 全局错误处理 — 防止内部错误泄露
-app.use(async (ctx, next) => {
-  try {
-    await next();
-  } catch (err: any) {
-    LogService.error("Unhandled error", err);
-    ctx.status = err.status || 500;
-    ctx.body = { code: ctx.status, message: "Internal server error" };
-  }
+app.onError((err, c) => {
+  LogService.error("Unhandled error", err);
+  return c.json({ code: 500, message: "Internal server error" }, 500);
 });
 
-app.use(corsMiddleware)
-   .use(bodyParser())
-   .use(routerMiddleware.routes())
-   .use(routerMiddleware.allowedMethods());
+// CORS
+app.use("*", corsMiddleware);
 
-const port = process.env.PORT || '3000';
-app.listen(port);
+// 静态文件 — 管理面板构建产物
+app.use("/*", serveStatic({ root: "./public" }));
+
+// API 路由（在静态文件之后，优先于 SPA fallback）
+app.route("/", router);
+
+// SPA fallback — 管理面板前端路由
+app.get("*", async (c) => {
+  const htmlPath = path.join(process.cwd(), "public", "index.html");
+  if (fs.existsSync(htmlPath)) {
+    return c.html(fs.readFileSync(htmlPath, "utf-8"));
+  }
+  return c.notFound();
+});
+
+const port = Number(process.env.PORT || 3000);
+serve({ fetch: app.fetch, port });
 
 console.log(`Server running on http://localhost:${port}`);

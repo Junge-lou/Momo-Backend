@@ -1,28 +1,19 @@
-import type koa from "koa";
-import CommentService  from "../../orm/commentService";
-import { getQueryNumber, getQueryBoolean, getQueryString } from "../../utils/url";
-import { checkKey, extractToken } from "../../utils/security"
+import type { Context } from "hono";
+import CommentService from "../../orm/commentService";
+import { getQueryNumber, getQueryString } from "../../utils/url";
+import { checkKey, extractToken } from "../../utils/security";
 
-export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
-  const commentId =  getQueryNumber(ctx.query.id as string, 0);
-  const status =  getQueryString(ctx.query.status as string, "pending");
-  // const key = getQueryString(ctx.query.key as string, "");
-  const authHeader = ctx.get("Authorization");
+export default async (c: Context): Promise<Response> => {
+  const commentId = getQueryNumber(c.req.query("id"), 0);
+  const status = getQueryString(c.req.query("status"), "pending");
+  const authHeader = c.req.header("Authorization") || "";
   const key = extractToken(authHeader);
 
-  if(!key || !checkKey(key)) {
-    ctx.status = 401;
-    ctx.body = { 
-      code: 401,
-      message: "Invalid token"
-    };
-    return;
+  if (!key || !checkKey(key)) {
+    return c.json({ code: 401, message: "Invalid token" }, 401);
   }
 
   await CommentService.updateCommentStatus(commentId, status);
 
-  ctx.body = {
-    code: 200,
-    message: `Comment status updated`
-  };
-}
+  return c.json({ code: 200, message: `Comment status updated` });
+};

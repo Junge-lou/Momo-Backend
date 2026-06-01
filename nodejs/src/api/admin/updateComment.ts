@@ -1,34 +1,24 @@
-import type koa from "koa";
+import type { Context } from "hono";
 import CommentService from "../../orm/commentService";
 import { checkKey, extractToken, sanitizeHtml } from "../../utils/security";
 import { parseMarkdown } from "../../utils/markdown";
 
-export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
-  const authHeader = ctx.get("Authorization");
+export default async (c: Context): Promise<Response> => {
+  const authHeader = c.req.header("Authorization") || "";
   const key = extractToken(authHeader);
 
   if (!key || !checkKey(key)) {
-    ctx.status = 401;
-    ctx.body = {
-      code: 401,
-      message: "Invalid token"
-    };
-    return;
+    return c.json({ code: 401, message: "Invalid token" }, 401);
   }
 
-  const body = ctx.request.body as any;
+  const body = await c.req.json();
   const id = body?.id;
 
   if (!id) {
-    ctx.status = 400;
-    ctx.body = {
-      code: 400,
-      message: "Invalid request parameters"
-    };
-    return;
+    return c.json({ code: 400, message: "Invalid request parameters" }, 400);
   }
 
-  const allowed = ['author', 'email', 'content_text', 'content_html', 'url'];
+  const allowed = ["author", "email", "content_text", "content_html", "url"];
   const fields: Record<string, any> = {};
   for (const key of allowed) {
     if (body[key] !== undefined) {
@@ -37,12 +27,7 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
   }
 
   if (Object.keys(fields).length === 0) {
-    ctx.status = 400;
-    ctx.body = {
-      code: 400,
-      message: "No fields to update"
-    };
-    return;
+    return c.json({ code: 400, message: "No fields to update" }, 400);
   }
 
   // 只改了 content_text 但没传 content_html 时，自动渲染 markdown
@@ -52,8 +37,5 @@ export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
 
   await CommentService.updateComment(id, fields);
 
-  ctx.body = {
-    code: 200,
-    message: "Comment updated"
-  };
+  return c.json({ code: 200, message: "Comment updated" });
 };

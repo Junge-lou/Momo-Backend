@@ -1,26 +1,24 @@
-import type koa from "koa";
+import type { Context } from "hono";
 import CommentService from "../../orm/commentService";
-import { checkKey, extractToken } from "../../utils/security"
+import { checkKey, extractToken } from "../../utils/security";
 import { getQueryNumber } from "../../utils/url";
 
-export default async (ctx: koa.Context): Promise<void> => {
-  const authHeader = ctx.get("Authorization");
+export default async (c: Context): Promise<Response> => {
+  const authHeader = c.req.header("Authorization") || "";
   const key = extractToken(authHeader);
 
   if (!key || !checkKey(key)) {
-    ctx.status = 401;
-    ctx.body = { code: 401, message: "Invalid token" };
-    return;
+    return c.json({ code: 401, message: "Invalid token" }, 401);
   }
 
-  const page = getQueryNumber(ctx.query.page as string, 1);
-  const limit = getQueryNumber(ctx.query.limit as string, 20);
+  const page = getQueryNumber(c.req.query("page"), 1);
+  const limit = getQueryNumber(c.req.query("limit"), 20);
 
   const result = await CommentService.getUserList(page, limit);
 
-  ctx.body = {
+  return c.json({
     code: 200,
     message: "Users fetched successfully",
-    data: result
-  };
+    data: result,
+  });
 };

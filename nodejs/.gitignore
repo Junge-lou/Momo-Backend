@@ -7,12 +7,8 @@ public/
 # code
 .vscode/
 
-# prisma
-/src/generated/prisma
-/prisma/migrations
-.env
-*.db
-*.db.bak
+# data
+data/
 
 # dependencies
 node_modules/

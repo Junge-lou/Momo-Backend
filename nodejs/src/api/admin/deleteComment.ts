@@ -1,23 +1,18 @@
-import type koa from "koa";
-import CommentService  from "../../orm/commentService";
-import { getQueryNumber, getQueryBoolean, getQueryString } from "../../utils/url";
-import { checkKey, extractToken } from "../../utils/security"
-import { Comment, CreateCommentInput } from "../../type/prisma"
+import type { Context } from "hono";
+import CommentService from "../../orm/commentService";
+import { getQueryNumber } from "../../utils/url";
+import { checkKey, extractToken } from "../../utils/security";
 
-export default async (ctx: koa.Context, next: koa.Next): Promise<void> => {
-  const deleteId =  getQueryNumber(ctx.query.id as string, 0);
-  // const key = getQueryString(ctx.query.key as string, "");
-  const authHeader = ctx.get("Authorization");
+export default async (c: Context): Promise<Response> => {
+  const deleteId = getQueryNumber(c.req.query("id"), 0);
+  const authHeader = c.req.header("Authorization") || "";
   const key = extractToken(authHeader);
 
-  if(!key || !checkKey(key)) {
-    ctx.status = 401;
-    ctx.body = { code: 401, message: "Invalid token" };
-    return;
+  if (!key || !checkKey(key)) {
+    return c.json({ code: 401, message: "Invalid token" }, 401);
   }
 
-  const comment = await CommentService.deleteComment(deleteId);
-  ctx.body = {
-    message: "Comment deleted, id: " + deleteId + "."
-  };
-}
+  await CommentService.deleteComment(deleteId);
+
+  return c.json({ message: "Comment deleted, id: " + deleteId + "." });
+};
