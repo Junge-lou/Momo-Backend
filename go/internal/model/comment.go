@@ -4,6 +4,19 @@ import (
 	"time"
 )
 
+// EmailVerification 邮箱验证记录
+type EmailVerification struct {
+	ID         int64   `db:"id" json:"id"`
+	Email      string  `db:"email" json:"email"`
+	Token      string  `db:"token" json:"token"`
+	ExpiresAt  string  `db:"expires_at" json:"expiresAt"`
+	Verified   int     `db:"verified" json:"verified"`
+	PostSlug   *string `db:"post_slug" json:"postSlug,omitempty"`
+	PostTitle  *string `db:"post_title" json:"postTitle,omitempty"`
+	CreatedAt  string  `db:"created_at" json:"createdAt"`
+	VerifiedAt *string `db:"verified_at" json:"verifiedAt,omitempty"`
+}
+
 // Comment 对应数据库中的 Comment 表
 type Comment struct {
 	ID          int64   `db:"id" json:"id"`

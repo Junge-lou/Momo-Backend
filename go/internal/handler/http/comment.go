@@ -2,13 +2,16 @@ package http
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"momo-backend-go/internal/model"
 	"momo-backend-go/internal/pkg/utils"
 	"momo-backend-go/internal/repository"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -36,8 +39,6 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 	// 1. 获取并解析 User-Agent
 	uaString := c.GetHeader("User-Agent")
 	var deviceStr, browserStr, osStr string
-
-	// fmt.Printf("Received User-Agent: %s\n", uaString)
 
 	ua := useragent.Parse(uaString)
 
@@ -98,6 +99,49 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 			return
 		}
 	}
+
+	// 邮箱验证检查
+	needsVerification := false
+	emailVerifyEnabled := utils.GetSetting("email_verify_enabled")
+	if emailVerifyEnabled == "true" && !isAdminVerified && utils.GetService().IsAvailable() {
+		isVerified, err := h.Repo.CheckEmailVerified(c.Request.Context(), req.Email)
+		if err == nil && !isVerified {
+			needsVerification = true
+			hasToken, _ := h.Repo.HasUnverifiedToken(c.Request.Context(), req.Email)
+			if !hasToken {
+				tokenBytes := make([]byte, 32)
+				rand.Read(tokenBytes)
+				token := hex.EncodeToString(tokenBytes)
+				expiresAt := time.Now().Add(24 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+				_ = h.Repo.SaveVerificationToken(c.Request.Context(), req.Email, token, expiresAt, req.PostSlug, req.PostTitle)
+				// 优先使用手动配置的验证地址，否则从请求头推断
+					baseURL := utils.GetSetting("verify_base_url")
+					if baseURL == "" {
+						origin := c.GetHeader("Origin")
+						if origin == "" {
+							origin = c.Request.Host
+						}
+						if origin != "" && !strings.HasPrefix(origin, "http") {
+							if strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1") {
+								origin = "http://" + origin
+							} else {
+								origin = "https://" + origin
+							}
+						}
+						baseURL = origin
+					}
+					baseURL = strings.TrimRight(baseURL, "/")
+					verifyURL := fmt.Sprintf("%s/api/verify-email/verify?token=%s&email=%s",
+						baseURL, url.QueryEscape(token), url.QueryEscape(req.Email))
+				go func() {
+					if err := utils.GetService().SendVerificationEmail(req.Email, req.Author, req.PostTitle, req.PostSlug, verifyURL); err != nil {
+						log.Printf("验证邮件发送失败: %v", err)
+					}
+				}()
+			}
+		}
+	}
+
 	// 5. XSS 检查（纯文本字段使用 CheckContent，content 走 Markdown + bluemonday 完整净化）
 	sanitizedAuthor := utils.CheckContent(req.Author)
 	sanitizedURL := utils.CheckContent(req.URL)
@@ -130,6 +174,9 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 			if isAdminVerified {
 				return "approved"
 			}
+			if needsVerification {
+				return "pending"
+			}
 			return utils.GetCommentStatus()
 		}(),
 	}
@@ -144,15 +191,12 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 	}
 
 	// 发送邮件通知
-
 	if utils.GetService().IsAvailable() && utils.IsEmailEnabled() {
 		go func() {
-			// 创建独立的 context，避免受 HTTP 请求生命周期影响
 			ctx := context.Background()
 
 			if req.ParentID != nil {
 				parentComment, err := h.Repo.GetByID(ctx, *req.ParentID)
-				// fmt.Printf("Parent Comment: %+v\n", parentComment)
 				if err != nil {
 					log.Printf("Failed to fetch parent comment: %v", err)
 					return
@@ -191,7 +235,12 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
-		"message": "Comment submitted",
+		"message": func() string {
+			if needsVerification {
+				return "Comment submitted! Verification email sent. Please check your inbox."
+			}
+			return "Comment submitted"
+		}(),
 	})
 }
 
@@ -269,15 +318,12 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 
 	// 3. 根据是否嵌套进行逻辑处理
 	if nested {
-		// 嵌套模式：构建树并对顶级评论分页
 		tree := buildCommentTree(allResponses)
 		total = len(tree)
 
-		// 对根节点进行物理分页
 		start, end := slicePagination(total, page, limit)
 		result = tree[start:end]
 	} else {
-		// 非嵌套模式：直接分页
 		total = len(allResponses)
 		start, end := slicePagination(total, page, limit)
 		result = allResponses[start:end]
@@ -287,7 +333,6 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 		result = make([]*model.CommentResponse, 0)
 	}
 
-	// 4. 返回响应
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "Comments fetched successfully",
@@ -316,12 +361,10 @@ func buildCommentTree(comments []*model.CommentResponse) []*model.CommentRespons
 	nodes := make(map[int64]*model.CommentResponse)
 	var roots []*model.CommentResponse
 
-	// 首先映射所有节点
 	for _, c := range comments {
 		nodes[c.ID] = c
 	}
 
-	// 构建父子关系
 	for _, c := range comments {
 		if c.ParentID != nil {
 			if parent, ok := nodes[*c.ParentID]; ok {
@@ -329,7 +372,6 @@ func buildCommentTree(comments []*model.CommentResponse) []*model.CommentRespons
 				continue
 			}
 		}
-		// 如果没有父节点或父节点不在列表中，则视为根评论
 		roots = append(roots, c)
 	}
 	return roots

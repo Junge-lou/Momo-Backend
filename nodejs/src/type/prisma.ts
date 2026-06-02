@@ -3,7 +3,7 @@ import { comments } from "../orm/schema";
 
 /**
  * 替换 Prisma 生成的 Comment 类型，改用 Drizzle 推断类型
- * pub_date 在 SQLite 中存储为 ISO 字符串，代码中使用 Date 对象
+ * pub_date 在 SQLite 中存储为毫秒时间戳（INTEGER），代码中使用 Date 对象
  */
 export type CommentRow = InferSelectModel<typeof comments>;
 
@@ -27,7 +27,7 @@ export interface Comment {
 
 export interface CreateCommentInput {
   id?: number;
-  pub_date: string;
+  pub_date: number;
   post_slug: string;
   author: string;
   email: string;

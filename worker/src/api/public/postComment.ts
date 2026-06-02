@@ -1,7 +1,7 @@
 import { Context } from 'hono';
 import { UAParser } from 'ua-parser-js';
 import { Bindings } from '../../bindings';
-import { sendCommentNotification, sendCommentReplyNotification } from '../../utils/email';
+import { sendCommentNotification, sendCommentReplyNotification, sendVerificationEmail, checkEmailVerified, hasUnverifiedToken, saveVerificationToken } from '../../utils/email';
 import { isEmailEnabled, getSetting } from '../../utils/settings';
 import { parseMarkdown } from '../../utils/markdown';
 
@@ -120,7 +120,50 @@ export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
   const postUrl = checkContent(data.post_url || '');
   const uaParser = new UAParser(userAgent);
   const uaResult = uaParser.getResult();
-  const status = isAdminVerified ? "approved" : await getCommentStatus(c.env);
+  let status = isAdminVerified ? "approved" : await getCommentStatus(c.env);
+
+  // 邮箱验证检查
+  let needsVerification = false;
+  const emailVerifyEnabled = await getSetting(c.env, "email_verify_enabled");
+  if (emailVerifyEnabled === "true" && !isAdminVerified) {
+    const smtpConfig = await getSetting(c.env, "smtp_host");
+    if (smtpConfig) {
+      const isVerified = await checkEmailVerified(c.env, data.email);
+      if (!isVerified) {
+        needsVerification = true;
+        status = "pending";
+
+        if (!(await hasUnverifiedToken(c.env, data.email))) {
+          const token = crypto.randomUUID();
+          const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          await saveVerificationToken(c.env, data.email, token, expiresAt, data.post_slug, postTitle);
+
+          // 优先使用手动配置的验证地址，否则从请求头推断
+          let baseUrl = await getSetting(c.env, "verify_base_url");
+          if (!baseUrl) {
+            const origin = c.req.header("Origin") || c.req.header("Host") || "";
+            const protocol = origin.includes("localhost") || origin.includes("127.0.0.1") ? "http" : "https";
+            baseUrl = origin.startsWith("http") ? origin : `${protocol}://${origin}`;
+          }
+          const verifyUrl = `${baseUrl.replace(/\/+$/, "")}/api/verify-email/verify?token=${encodeURIComponent(token)}&email=${encodeURIComponent(data.email)}`;
+
+          c.executionCtx.waitUntil((async () => {
+            try {
+              await sendVerificationEmail(c.env, {
+                toEmail: data.email,
+                toName: author,
+                postTitle: postTitle,
+                postSlug: data.post_slug,
+                verifyUrl,
+              });
+            } catch (e) {
+              console.error("验证邮件发送失败:", e);
+            }
+          })());
+        }
+      }
+    }
+  }
 
   // 6. 写入 D1 数据库
   try {
@@ -188,7 +231,11 @@ export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
       console.log("No SMTP configuration found. Skipping email notification.");
     }
 
-    return c.json({ message: "Comment submitted" });
+    return c.json({
+      message: needsVerification
+        ? "Comment submitted! Verification email sent. Please check your inbox."
+        : "Comment submitted"
+    });
 
   } catch (e: any) {
     console.error("Create Comment Error:", e);

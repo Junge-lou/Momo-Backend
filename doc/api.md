@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | POST | `/api/comments` | 提交评论 |
 | GET | `/api/comments` | 获取评论 |
+| GET | `/api/verify-email/verify` | 验证邮箱（从邮件链接访问，返回 HTML 页面） |
 | POST | `/admin/login` | 登录 |
 | GET | `/admin/settings` | 获取系统设置 |
 | PUT | `/admin/settings` | 更新系统设置 |
@@ -109,6 +110,13 @@
 ```
 
 > 当 `comment_auto_approve` 设为 `"false"` 时，评论提交后状态为 `"pending"`，需在管理后台审核通过后才会公开显示。
+
+> **邮箱验证**：当 `email_verify_enabled` 设为 `"true"` 且 SMTP 已配置时：
+> - 如果评论者的邮箱尚未验证，评论状态会被设为 `"pending"`
+> - 系统会自动发送验证邮件到评论者邮箱
+> - 验证通过后，所有来自该邮箱的待审核评论会自动变为 `"approved"`
+> - 后续该邮箱的评论将正常发布（遵守 `comment_auto_approve` 设置）
+> - 响应消息会变为 `"Comment submitted. Please verify your email to publish the comment."`
 
 ### 获取评论（GET `/api/comments`）
 
@@ -217,6 +225,20 @@
 ```
 ---
 
+### 验证邮箱（GET `/api/verify-email/verify`）
+
+> 从验证邮件链接中访问，返回 HTML 页面，非 JSON 接口。用于完成邮箱验证流程。
+
+**查询参数**：
+- `token`：验证令牌（必需）
+- `email`：邮箱地址（必需）
+
+**成功**：返回 HTML 页面，显示"邮箱验证成功！共 N 条评论已通过审核。"
+
+**失败**：返回 HTML 页面，显示具体的错误原因（链接无效、已过期等）。
+
+---
+
 ## 管理员接口
 
 > 🚧 需要 `Authorization: Bearer <token>`
@@ -269,7 +291,7 @@
 **查询参数**：
 - `type`：按模块筛选（可选）
   - `basic` — 基本设置（站点信息、评论审核、博主标识、占位符）
-  - `email` — 邮件通知（SMTP 配置、邮件模板）
+  - `email` — 邮件通知（SMTP 配置、邮箱验证、邮件模板）
   - `security` — 安全设置（CORS、评论密钥、IP/邮箱黑名单）
   - `account` — 账户信息（管理员名称）
   - 不传则返回全部设置（向后兼容）
@@ -291,6 +313,7 @@
     "email_password": "",
     "email_secure": "true",
     "email_enabled": "true",
+    "email_verify_enabled": "false",
     "reply_template": "",
     "notification_template": "",
     "comment_auto_approve": "true",
@@ -343,6 +366,7 @@
     "email_password": "",
     "email_secure": "true",
     "email_enabled": "true",
+    "email_verify_enabled": "false",
     "reply_template": "",
     "notification_template": ""
   }
@@ -401,6 +425,7 @@
   "email_secure": "false",
   "allow_origin": "https://myblog.com",
   "email_enabled": "true",
+  "email_verify_enabled": "false",
   "reply_template": "<div>Hi {{toName}}，<br>{{replyAuthor}} 回复了你：{{replyContent}}</div>",
   "notification_template": "<div>{{commentAuthor}} 评论了 {{postTitle}}：{{commentContent}}</div>",
   "comment_auto_approve": "false",
@@ -861,6 +886,7 @@
       "email_secure": "true",
       "allow_origin": "*",
       "email_enabled": "true",
+    "email_verify_enabled": "false",
       "reply_template": "...",
       "notification_template": "..."
     }

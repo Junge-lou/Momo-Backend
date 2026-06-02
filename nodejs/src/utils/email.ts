@@ -256,6 +256,152 @@ export async function sendCommentNotification({
   }
 }
 
+// ---- 邮箱验证相关 ----
+import { db, schema } from "../orm/client";
+import { eq, and, gte } from "drizzle-orm";
+
+/**
+ * 检查邮箱是否已验证
+ */
+export async function checkEmailVerified(email: string): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(schema.emailVerifications)
+    .where(
+      and(
+        eq(schema.emailVerifications.email, email),
+        eq(schema.emailVerifications.verified, 1)
+      )
+    )
+    .limit(1)
+    .all();
+  return rows.length > 0;
+}
+
+/**
+ * 保存验证令牌
+ */
+export async function saveVerificationToken(
+  email: string,
+  token: string,
+  expiresAt: string,
+  postSlug?: string,
+  postTitle?: string
+): Promise<void> {
+  await db
+    .insert(schema.emailVerifications)
+    .values({
+      email,
+      token,
+      created_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      verified: 0,
+      post_slug: postSlug || null,
+      post_title: postTitle || null,
+    })
+    .run();
+}
+
+/**
+ * 检查邮箱是否存在未过期的未验证令牌（避免重复发送）
+ */
+export async function hasUnverifiedToken(email: string): Promise<boolean> {
+  const rows = await db
+    .select()
+    .from(schema.emailVerifications)
+    .where(
+      and(
+        eq(schema.emailVerifications.email, email),
+        eq(schema.emailVerifications.verified, 0),
+        gte(schema.emailVerifications.expires_at, new Date().toISOString())
+      )
+    )
+    .limit(1)
+    .all();
+  return rows.length > 0;
+}
+
+/**
+ * 批准某邮箱的所有待审核评论
+ */
+export async function approvePendingComments(email: string): Promise<number> {
+  const result = await db
+    .update(schema.comments)
+    .set({ status: "approved" })
+    .where(
+      and(
+        eq(schema.comments.email, email),
+        eq(schema.comments.status, "pending")
+      )
+    )
+    .run();
+  return result.changes || 0;
+}
+
+/**
+ * 发送验证邮件
+ */
+export async function sendVerificationEmail({
+  toEmail,
+  toName,
+  postTitle,
+  postSlug,
+  verifyUrl,
+}: {
+  toEmail: string;
+  toName: string;
+  postTitle: string;
+  postSlug: string;
+  verifyUrl: string;
+}) {
+  const config = await getSmtpConfig();
+  if (!config) {
+    LogService.warn("验证邮件发送跳过：SMTP 服务未配置好");
+    return null;
+  }
+
+  if (!(await isEmailEnabled())) {
+    LogService.info("验证邮件发送跳过：邮件通知功能已关闭");
+    return null;
+  }
+
+  try {
+    const siteName = (await getSetting("site_name")) || "Momo Blog";
+
+    const htmlContent = `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 30px; border: 1px solid #e1e4e8; border-radius: 8px;">
+        <h2 style="color: #333; margin-top: 0;">验证你的邮箱地址</h2>
+        <p style="color: #555; line-height: 1.6;">
+          Hi ${htmlEscape(toName)}，<br><br>
+          你在 <strong>${htmlEscape(siteName)}</strong> 的文章
+          <strong>《${htmlEscape(postTitle)}》</strong> 中提交了评论。
+        </p>
+        <p style="color: #555; line-height: 1.6;">
+          请访问以下链接验证你的邮箱（或复制到浏览器打开）：
+        </p>
+        <p style="margin: 24px 0; padding: 12px; background: #f5f5f5; border-radius: 4px; word-break: break-all; font-size: 14px; color: #0066cc;">
+          ${htmlEscape(verifyUrl)}
+        </p>
+        <p style="color: #999; font-size: 13px;">此链接 24 小时内有效。如果你没有提交评论，请忽略此邮件。</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
+        <p style="color: #999; font-size: 12px;">此邮件由系统自动发送，请勿直接回复。</p>
+      </div>`;
+
+    const info = await sendEmail(config, {
+      from: await getSenderAddress(),
+      to: toEmail,
+      subject: `请验证你在 ${htmlEscape(siteName)} 上的评论邮箱`,
+      html: htmlContent,
+    });
+
+    LogService.info("验证邮件已发送:", info.messageId);
+    return info;
+  } catch (error) {
+    LogService.error("验证邮件发送失败:", error);
+    return null;
+  }
+}
+
 export async function sendTestEmail(toEmail: string): Promise<void> {
   const config = await getSmtpConfig();
   if (!config) {

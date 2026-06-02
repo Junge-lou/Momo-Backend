@@ -17,6 +17,7 @@ export interface Translation {
         loadFailed: string;
         submitSuccess: string;
         submitFailed: string;
+        verificationRequired: string;
         fillRequired: string;
         confirmDelete: string;
         delete: string;

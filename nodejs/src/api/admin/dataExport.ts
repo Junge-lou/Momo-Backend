@@ -34,6 +34,19 @@ export async function exportSettings(c: Context): Promise<Response> {
     email_enabled: true,
     reply_template: true,
     notification_template: true,
+    comment_auto_approve: true,
+    ip_blacklist: true,
+    email_blacklist: true,
+    blogger_badge_enabled: true,
+    blogger_badge_text: true,
+    placeholder_name: true,
+    placeholder_email: true,
+    placeholder_content: true,
+    placeholder_url: true,
+    admin_comment_key: true,
+    admin_comment_key_enabled: true,
+    email_verify_enabled: true,
+    verify_base_url: true,
   };
 
   const filtered: Record<string, string> = {};

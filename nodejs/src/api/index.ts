@@ -1,5 +1,6 @@
 import getCommentBySlug from "./public/getCommentBySlug";
 import postComment from "./public/postComment";
+import verifyEmail from "./public/verifyEmail";
 
 import getAllComments from "./admin/getAllComments";
 import changeCommentStatus from "./admin/changeCommentStatus";
@@ -13,5 +14,5 @@ import changePassword from "./admin/password";
 import { importComments, importSettings } from "./admin/dataImport";
 import { exportSettings, exportComments } from "./admin/dataExport";
 
-export { getCommentBySlug, postComment };
+export { getCommentBySlug, postComment, verifyEmail };
 export { getAllComments, changeCommentStatus, updateComment, login, getStatsOverview, getUserList, getUserComments, getSettings, updateSettings, changePassword, testEmail, importComments, importSettings, exportSettings, exportComments };

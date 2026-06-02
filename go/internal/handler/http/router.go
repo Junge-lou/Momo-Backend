@@ -41,6 +41,7 @@ func RegisterRoutes(r *gin.Engine, h *CommentHandler) {
 	{
 		api.POST("/comments", h.PostComment)
 		api.GET("/comments", h.GetComments)
+		api.GET("/verify-email/verify", h.VerifyEmail)
 	}
 
 	// 2. 管理员接口

@@ -19,6 +19,7 @@ const translation: Translation = {
         loadFailed: "Failed to load",
         submitSuccess: "Submitted successfully",
         submitFailed: "Submission failed, please try again later",
+        verificationRequired: "Email verification required. Please check your inbox.",
         fillRequired: "Please fill in name, email and comment content",
         confirmDelete: "Are you sure you want to delete this comment?",
         delete: "Delete",

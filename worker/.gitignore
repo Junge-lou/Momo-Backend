@@ -167,3 +167,4 @@ dist
 .wrangler/
 
 public/
+!src/api/public/

@@ -213,7 +213,11 @@
         }),
       });
       const data = await res.json();
-      alert(data.message || t('comments.submitSuccess'));
+      if (data.message && data.message.includes('Verification email sent')) {
+        alert(t('comments.submitSuccess') + ' ' + t('comments.verificationRequired'));
+      } else {
+        alert(data.message || t('comments.submitSuccess'));
+      }
       
       if (!replyData) {
         content = '';

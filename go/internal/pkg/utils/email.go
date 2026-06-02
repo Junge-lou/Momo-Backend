@@ -3,6 +3,7 @@ package utils
 import (
 	"crypto/tls"
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 
@@ -201,6 +202,39 @@ func (s *EmailService) SendCommentNotification(
 	m.SetHeader("From", m.FormatAddress(s.fromEmail, fmt.Sprintf("%s 评论通知", s.siteName)))
 	m.SetHeader("To", s.adminMail)
 	m.SetHeader("Subject", fmt.Sprintf("你在 %s 上有新的评论", s.siteName))
+	m.SetBody("text/html", htmlContent)
+
+	return s.dialer.DialAndSend(m)
+}
+
+// SendVerificationEmail 发送邮箱验证邮件
+func (s *EmailService) SendVerificationEmail(toEmail, toName, postTitle, postSlug, verifyURL string) error {
+	if !s.IsAvailable() {
+		return fmt.Errorf("邮件服务未配置")
+	}
+
+	htmlContent := fmt.Sprintf(`
+      <div style="font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 30px; border: 1px solid #e1e4e8; border-radius: 8px;">
+        <h2 style="color: #333; margin-top: 0;">验证你的邮箱地址</h2>
+        <p style="color: #555; line-height: 1.6;">
+          Hi %s，<br><br>
+          你在 <strong>%s</strong> 的文章
+          <strong>《%s》</strong> 中提交了评论。
+        </p>
+        <p style="color: #555; line-height: 1.6;">
+          请访问以下链接验证你的邮箱（或复制到浏览器打开）：
+        </p>
+        <p style="margin: 24px 0; padding: 12px; background: #f5f5f5; border-radius: 4px; word-break: break-all; font-size: 14px; color: #0066cc;">
+          %s
+        </p>
+        <p style="color: #999; font-size: 13px;">此链接 24 小时内有效。如果你没有提交评论，请忽略此邮件。</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
+        <p style="color: #999; font-size: 12px;">此邮件由系统自动发送，请勿直接回复。</p>
+      </div>`, html.EscapeString(toName), html.EscapeString(s.siteName), html.EscapeString(postTitle), html.EscapeString(verifyURL))
+	m := gomail.NewMessage()
+	m.SetHeader("From", m.FormatAddress(s.fromEmail, fmt.Sprintf("%s 评论通知", s.siteName)))
+	m.SetHeader("To", toEmail)
+	m.SetHeader("Subject", fmt.Sprintf("请验证你在 %s 上的评论邮箱", s.siteName))
 	m.SetBody("text/html", htmlContent)
 
 	return s.dialer.DialAndSend(m)

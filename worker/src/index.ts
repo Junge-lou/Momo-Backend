@@ -6,6 +6,7 @@ import { adminAuth } from './utils/auth'
 
 import { getComments } from './api/public/getComments'
 import { postComment } from './api/public/postComment'
+import { verifyEmail } from './api/public/verifyEmail'
 import { adminLogin } from './api/admin/login'
 import { getSettings, updateSettings, testEmail } from './api/admin/settings'
 import { changePassword } from './api/admin/password'
@@ -30,6 +31,7 @@ app.use('/api/*', async (c, next) => {
 // API
 app.get('/api/comments', getComments)
 app.post('/api/comments', postComment)
+app.get('/api/verify-email/verify', verifyEmail)
 
 app.post('/admin/login', adminLogin)
 app.use('/admin/*', adminAuth)

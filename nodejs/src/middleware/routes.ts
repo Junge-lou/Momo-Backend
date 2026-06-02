@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getCommentBySlug, postComment } from "../api/index"; // public
+import { getCommentBySlug, postComment, verifyEmail } from "../api/index"; // public
 import {
   getAllComments,
   changeCommentStatus,
@@ -25,6 +25,7 @@ const router = new Hono();
 // Public API
 router.get("/api/comments", getCommentBySlug);
 router.post("/api/comments", postComment);
+router.get("/api/verify-email/verify", verifyEmail);
 
 // Admin settings
 router.get("/admin/settings", getSettings);

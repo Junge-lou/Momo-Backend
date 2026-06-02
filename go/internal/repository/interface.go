@@ -22,4 +22,11 @@ type CommentRepository interface {
 	ListAll(ctx context.Context) ([]*model.Comment, error)
 	// Rate limiting
 	GetLastCommentByIP(ctx context.Context, ip string) (*model.Comment, error)
+
+	// Email verification
+	CheckEmailVerified(ctx context.Context, email string) (bool, error)
+	HasUnverifiedToken(ctx context.Context, email string) (bool, error)
+	SaveVerificationToken(ctx context.Context, email, token, expiresAt, postSlug, postTitle string) error
+	GetVerificationRecord(ctx context.Context, token, email string) (*model.EmailVerification, error)
+	VerifyEmail(ctx context.Context, token, email string) (int64, error)
 }

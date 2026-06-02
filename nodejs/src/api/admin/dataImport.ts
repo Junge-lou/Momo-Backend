@@ -62,7 +62,7 @@ export async function importComments(c: Context): Promise<Response> {
       if (item.user_agent) data.user_agent = item.user_agent;
       if (item.parent_id || item.parentId) data.parent_id = item.parent_id || item.parentId;
       if (item.status) data.status = item.status;
-      if (item.pub_date || item.pubDate) data.pub_date = new Date(item.pub_date || item.pubDate).toISOString();
+      if (item.pub_date || item.pubDate) data.pub_date = new Date(item.pub_date || item.pubDate).getTime();
 
       await db.insert(schema.comments).values(data as any).run();
       imported++;
@@ -105,6 +105,19 @@ export async function importSettings(c: Context): Promise<Response> {
     "email_enabled",
     "reply_template",
     "notification_template",
+    "comment_auto_approve",
+    "ip_blacklist",
+    "email_blacklist",
+    "blogger_badge_enabled",
+    "blogger_badge_text",
+    "placeholder_name",
+    "placeholder_email",
+    "placeholder_content",
+    "placeholder_url",
+    "admin_comment_key",
+    "admin_comment_key_enabled",
+    "email_verify_enabled",
+    "verify_base_url",
   ]);
 
   const updated: string[] = [];

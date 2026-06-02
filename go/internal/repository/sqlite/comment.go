@@ -61,6 +61,25 @@ func InitSchema(db *sqlx.DB) error {
 		return err
 	}
 
+	// EmailVerification table
+	verificationSchema := `
+	CREATE TABLE IF NOT EXISTS EmailVerification (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		email TEXT NOT NULL,
+		token TEXT NOT NULL UNIQUE,
+		expires_at TEXT NOT NULL,
+		verified INTEGER NOT NULL DEFAULT 0,
+		post_slug TEXT,
+		post_title TEXT,
+		created_at TEXT NOT NULL DEFAULT (datetime('now')),
+		verified_at TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_ev_email ON EmailVerification(email);
+	CREATE INDEX IF NOT EXISTS idx_ev_token ON EmailVerification(token);`
+	if _, err := db.Exec(verificationSchema); err != nil {
+		return err
+	}
+
 	_, err := db.Exec(schema)
 	return err
 }
@@ -417,4 +436,66 @@ func (r *commentRepo) GetLastCommentByIP(ctx context.Context, ip string) (*model
 		return nil, err
 	}
 	return &c, nil
+}
+
+// CheckEmailVerified 检查邮箱是否已验证
+func (r *commentRepo) CheckEmailVerified(ctx context.Context, email string) (bool, error) {
+	var count int64
+	err := r.db.GetContext(ctx, &count, "SELECT COUNT(*) FROM EmailVerification WHERE email = ? AND verified = 1", email)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// HasUnverifiedToken 检查邮箱是否有未过期的未验证令牌
+func (r *commentRepo) HasUnverifiedToken(ctx context.Context, email string) (bool, error) {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	var count int64
+	err := r.db.GetContext(ctx, &count,
+		"SELECT COUNT(*) FROM EmailVerification WHERE email = ? AND verified = 0 AND expires_at >= ?", email, now)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// SaveVerificationToken 保存验证令牌
+func (r *commentRepo) SaveVerificationToken(ctx context.Context, email, token, expiresAt, postSlug, postTitle string) error {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	_, err := r.db.ExecContext(ctx,
+		`INSERT INTO EmailVerification (email, token, created_at, expires_at, post_slug, post_title) VALUES (?, ?, ?, ?, ?, ?)`,
+		email, token, now, expiresAt, postSlug, postTitle)
+	return err
+}
+
+// GetVerificationRecord 获取验证记录
+func (r *commentRepo) GetVerificationRecord(ctx context.Context, token, email string) (*model.EmailVerification, error) {
+	var record model.EmailVerification
+	err := r.db.GetContext(ctx, &record,
+		`SELECT * FROM EmailVerification WHERE token = ? AND email = ?`, token, email)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+// VerifyEmail 验证邮箱并批准待审核评论，返回批准的评论数
+func (r *commentRepo) VerifyEmail(ctx context.Context, token, email string) (int64, error) {
+	// 标记为已验证
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE EmailVerification SET verified = 1, verified_at = datetime('now') WHERE token = ? AND email = ?`,
+		token, email)
+	if err != nil {
+		return 0, err
+	}
+
+	// 批准待审核评论
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE Comment SET status = 'approved' WHERE email = ? AND status = 'pending'`, email)
+	if err != nil {
+		return 0, err
+	}
+	count, _ := res.RowsAffected()
+	return count, nil
 }

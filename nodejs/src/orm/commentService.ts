@@ -209,7 +209,7 @@ class CommentService {
       const allForTrend = db
         .select({ pub_date: schema.comments.pub_date })
         .from(schema.comments)
-        .where(gte(schema.comments.pub_date, twelveMonthsAgo.toISOString()))
+        .where(gte(schema.comments.pub_date, twelveMonthsAgo.getTime()))
         .orderBy(asc(schema.comments.pub_date))
         .all() as unknown as { pub_date: string }[];
 
@@ -248,12 +248,12 @@ class CommentService {
       const recent = db
         .select({ pub_date: schema.comments.pub_date })
         .from(schema.comments)
-        .where(gte(schema.comments.pub_date, startDate.toISOString()))
+        .where(gte(schema.comments.pub_date, startDate.getTime()))
         .orderBy(asc(schema.comments.pub_date))
         .all() as unknown as { pub_date: string }[];
 
       recent.forEach((c) => {
-        const key = c.pub_date.slice(0, 10);
+        const key = new Date(c.pub_date).toISOString().slice(0, 10);
         if (dayMap.has(key)) {
           dayMap.set(key, (dayMap.get(key) || 0) + 1);
         }
@@ -362,9 +362,9 @@ class CommentService {
         const pendingCount = comments.filter((c) => c.status === "pending").length;
         const deletedCount = comments.filter((c) => c.status === "deleted").length;
         const firstCommentDate =
-          comments.length > 0 ? comments[comments.length - 1].pub_date : "";
+          comments.length > 0 ? new Date(comments[comments.length - 1].pub_date).toISOString() : "";
         const lastCommentDate =
-          comments.length > 0 ? comments[0].pub_date : "";
+          comments.length > 0 ? new Date(comments[0].pub_date).toISOString() : "";
 
         return {
           author: u.author,

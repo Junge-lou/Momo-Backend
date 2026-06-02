@@ -200,6 +200,95 @@ export async function sendCommentNotification(
   });
 }
 
+// ---- 邮箱验证相关 ----
+
+/**
+ * 检查邮箱是否已验证
+ */
+export async function checkEmailVerified(env: Bindings, email: string): Promise<boolean> {
+  const row = await env.MOMO_DB.prepare(
+    "SELECT COUNT(*) as count FROM EmailVerification WHERE email = ? AND verified = 1"
+  ).bind(email).first<{ count: number }>();
+  return row ? row.count > 0 : false;
+}
+
+/**
+ * 检查邮箱是否存在未过期的未验证令牌
+ */
+export async function hasUnverifiedToken(env: Bindings, email: string): Promise<boolean> {
+  const row = await env.MOMO_DB.prepare(
+    "SELECT COUNT(*) as count FROM EmailVerification WHERE email = ? AND verified = 0 AND expires_at >= datetime('now')"
+  ).bind(email).first<{ count: number }>();
+  return row ? row.count > 0 : false;
+}
+
+/**
+ * 保存验证令牌
+ */
+export async function saveVerificationToken(env: Bindings, email: string, token: string, expiresAt: string, postSlug?: string, postTitle?: string): Promise<void> {
+  const now = new Date().toISOString();
+  await env.MOMO_DB.prepare(
+    "INSERT INTO EmailVerification (email, token, created_at, expires_at, post_slug, post_title) VALUES (?, ?, ?, ?, ?, ?)"
+  ).bind(email, token, now, expiresAt, postSlug || null, postTitle || null).run();
+}
+
+/**
+ * 批准某邮箱的所有待审核评论
+ */
+export async function approvePendingComments(env: Bindings, email: string): Promise<number> {
+  const result = await env.MOMO_DB.prepare(
+    "UPDATE Comment SET status = 'approved' WHERE email = ? AND status = 'pending'"
+  ).bind(email).run();
+  return result.meta.changes || 0;
+}
+
+/**
+ * 发送验证邮件
+ */
+export async function sendVerificationEmail(
+  env: Bindings,
+  params: {
+    toEmail: string;
+    toName: string;
+    postTitle: string;
+    postSlug: string;
+    verifyUrl: string;
+  }
+) {
+  if (!(await isEmailEnabled(env))) {
+    console.log("Email disabled by settings, skipping verification email");
+    return null;
+  }
+
+  const { toEmail, toName, postTitle, postSlug, verifyUrl } = params;
+  const siteName = await getSetting(env, "site_name") || 'Momo Blog';
+
+  const html = `
+    <div style="font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 30px; border: 1px solid #e1e4e8; border-radius: 8px;">
+      <h2 style="color: #333; margin-top: 0;">验证你的邮箱地址</h2>
+      <p style="color: #555; line-height: 1.6;">
+        Hi ${htmlEscape(toName)}，<br><br>
+        你在 <strong>${htmlEscape(siteName)}</strong> 的文章
+        <strong>《${htmlEscape(postTitle)}》</strong> 中提交了评论。
+      </p>
+      <p style="color: #555; line-height: 1.6;">
+        请访问以下链接验证你的邮箱（或复制到浏览器打开）：
+      </p>
+      <p style="margin: 24px 0; padding: 12px; background: #f5f5f5; border-radius: 4px; word-break: break-all; font-size: 14px; color: #0066cc;">
+        ${htmlEscape(verifyUrl)}
+      </p>
+      <p style="color: #999; font-size: 13px;">此链接 24 小时内有效。如果你没有提交评论，请忽略此邮件。</p>
+      <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
+      <p style="color: #999; font-size: 12px;">此邮件由系统自动发送，请勿直接回复。</p>
+    </div>`;
+
+  return await smtpFetch(env, {
+    to: toEmail,
+    subject: `请验证你在 ${htmlEscape(siteName)} 上的评论邮箱`,
+    html,
+  });
+}
+
 export async function sendTestEmail(env: Bindings, toEmail: string): Promise<void> {
   if (!(await isEmailEnabled(env))) {
     throw new Error('The email notification feature is currently disabled. ');

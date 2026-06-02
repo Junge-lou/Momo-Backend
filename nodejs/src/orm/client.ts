@@ -28,7 +28,7 @@ sqlite.pragma("journal_mode = WAL");
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS "Comment" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    "pub_date" TEXT NOT NULL DEFAULT (datetime('now')),
+    "pub_date" INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') AS INTEGER) * 1000),
     "post_slug" TEXT NOT NULL,
     "author" TEXT NOT NULL,
     "email" TEXT NOT NULL,
@@ -51,6 +51,20 @@ sqlite.exec(`
     "value" TEXT NOT NULL,
     "updated_at" TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS "EmailVerification" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "email" TEXT NOT NULL,
+    "token" TEXT NOT NULL UNIQUE,
+    "expires_at" TEXT NOT NULL,
+    "verified" INTEGER NOT NULL DEFAULT 0,
+    "post_slug" TEXT,
+    "post_title" TEXT,
+    "created_at" TEXT NOT NULL DEFAULT (datetime('now')),
+    "verified_at" TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_ev_email ON "EmailVerification"("email");
+  CREATE INDEX IF NOT EXISTS idx_ev_token ON "EmailVerification"("token");
 `);
 
 export const db = drizzle(sqlite, { schema });

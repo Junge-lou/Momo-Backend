@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 
 /**
  * Comment 表 — 与 Prisma 生成的表结构保持一致
@@ -8,7 +9,7 @@ export const comments = sqliteTable(
   "Comment",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    pub_date: text("pub_date").notNull().default("datetime('now')"),
+    pub_date: integer("pub_date").notNull().default(sql`(CAST(strftime('%s', 'now') AS INTEGER) * 1000)`),
     post_slug: text("post_slug").notNull(),
     author: text("author").notNull(),
     email: text("email").notNull(),
@@ -37,3 +38,25 @@ export const settings = sqliteTable("Settings", {
   value: text("value").notNull(),
   updated_at: text("updated_at").notNull().default("datetime('now')"),
 });
+
+/**
+ * EmailVerification 表 — 邮箱验证记录
+ */
+export const emailVerifications = sqliteTable(
+  "EmailVerification",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    email: text("email").notNull(),
+    token: text("token").notNull().unique(),
+    expires_at: text("expires_at").notNull(),
+    verified: integer("verified").notNull().default(0),
+    post_slug: text("post_slug"),
+    post_title: text("post_title"),
+    created_at: text("created_at").notNull().default("datetime('now')"),
+    verified_at: text("verified_at"),
+  },
+  (table) => ({
+    emailIdx: index("idx_ev_email").on(table.email),
+    tokenIdx: index("idx_ev_token").on(table.token),
+  })
+);

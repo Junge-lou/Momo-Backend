@@ -11,6 +11,19 @@ export const exportSettings = async (c: Context<{ Bindings: Bindings }>) => {
     "smtp_host", "smtp_port", "email_user", "email_password", "email_secure",
     "allow_origin", "email_enabled",
     "reply_template", "notification_template",
+    "comment_auto_approve",
+    "ip_blacklist",
+    "email_blacklist",
+    "blogger_badge_enabled",
+    "blogger_badge_text",
+    "placeholder_name",
+    "placeholder_email",
+    "placeholder_content",
+    "placeholder_url",
+    "admin_comment_key",
+    "admin_comment_key_enabled",
+    "email_verify_enabled",
+    "verify_base_url",
   ]);
 
   const filtered: Record<string, string> = {};
