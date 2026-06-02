@@ -9,12 +9,12 @@
         <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
     </p>
     <p>
-        <img src="https://img.shields.io/badge/SQLite-3E8E41?logo=sqlite&logoColor=white" alt="SQLite">
-        <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TS">
         <img src="https://img.shields.io/badge/Hono-FF6B35?logo=hono&logoColor=white" alt="Hono">
-        <img src="https://img.shields.io/badge/Koa-33333D?logo=koa&logoColor=white" alt="Koa">
         <img src="https://img.shields.io/badge/Svelte-FF3E00?logo=svelte&logoColor=white" alt="Svelte">
-        <img src="https://img.shields.io/badge/Vue-3.5+-4FC08D?logo=vue.js&logoColor=white" alt="Vue">
+        <img src="https://img.shields.io/badge/Vue-4FC08D?logo=vue.js&logoColor=white" alt="Vue">
+        <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TS">
+        <img src="https://img.shields.io/badge/Drizzle-C5F74F?logo=drizzle&logoColor=black" alt="Drizzle">
+        <img src="https://img.shields.io/badge/SQLite-3E8E41?logo=sqlite&logoColor=white" alt="SQLite">
     </p>
 </div>
 
@@ -25,7 +25,7 @@
 ## 主要功能
 
 - 💬 **多级嵌套评论** — 支持无限层级的树形回复，Markdown 编辑，自动渲染 HTML
-- 🛡️ **安全防护** — IP 封禁、黑名单（IP/邮箱）、XSS 过滤、评论频率限制、管理员评论密钥验证
+- 🛡️ **安全防护** — IP 封禁、黑名单（IP/邮箱）、XSS 过滤、评论频率限制、管理员评论密钥验证，邮箱认证
 - 📧 **邮件通知** — SMTP 配置，新评论及回复自动通知，支持自定义模板
 - 📊 **管理面板** — 评论审核、数据概览统计、用户管理、模块化系统设置
 - ⚡ **多后端支持** — Node.js 、Go 、Cloudflare Worker 三种实现
@@ -55,7 +55,7 @@ Momo Backend 包含前端和后端两个模块，需要分别进行部署。
 API 应用基于 SQLite 数据库，对外提供 RESTful API，目前提供四种部署方式：
 
 * **Docker 版本** — 一键部署，推荐方式
-* **Node.js 版本** — 基于 Koa 3 + Prisma，适合有 Node.js 环境的服务器
+* **Node.js 版本** — 基于 Hono 4 + Drizzle ORM，适合有 Node.js 环境的服务器
 * **Go 版本** — 编译为单二进制文件，部署简单性能优异
 * **Cloudflare Worker 版本** — 基于 Hono + D1 + KV，无需服务器
 

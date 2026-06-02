@@ -54,3 +54,37 @@ CREATE TABLE IF NOT EXISTS Settings (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 ```
+
+### `v1.4.0` 版本
+
+#### Node.js 重构
+
+Node.js 后端从 **Koa + Prisma** 迁移至 **Hono + Drizzle ORM**。
+
+Prisma 下 model `Setting`（单数）对应表名 `Setting`，为了与其他版本保持一致，本次重构将表名称改成 `Settings`。
+
+Node.js 版本更新前需要运行迁移脚本，请执行下面的命令
+
+```bash
+node scripts/migrate-settings-table.js
+```
+
+#### 新增邮箱认证功能
+
+添加了 `EmailVerification` 表，SQL 语句如下：
+
+```sql
+CREATE TABLE IF NOT EXISTS EmailVerification (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0,
+    post_slug TEXT,
+    post_title TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    verified_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ev_email ON EmailVerification(email);
+CREATE INDEX IF NOT EXISTS idx_ev_token ON EmailVerification(token);
+```
