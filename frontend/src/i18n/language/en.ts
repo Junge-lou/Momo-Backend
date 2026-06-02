@@ -42,6 +42,8 @@ const translation: Translation = {
         link: "Link",
         image: "Image",
         list: "List",
+        showMoreReplies: "Show more replies",
+        collapseReplies: "Collapse",
     },
 }
 

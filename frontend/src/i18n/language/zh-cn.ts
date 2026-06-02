@@ -42,6 +42,8 @@ const translation: Translation = {
         link: "链接",
         image: "图片",
         list: "列表",
+        showMoreReplies: "查看剩余回复",
+        collapseReplies: "收起回复",
     },
 }
 

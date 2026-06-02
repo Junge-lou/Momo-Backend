@@ -40,5 +40,7 @@ export interface Translation {
         link: string;
         image: string;
         list: string;
+        showMoreReplies: string;
+        collapseReplies: string;
     },
 }

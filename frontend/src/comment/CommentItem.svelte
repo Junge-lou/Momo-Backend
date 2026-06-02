@@ -125,9 +125,17 @@
     return res;
   }
 
-  $: mobileFlattenedReplies = (depth === 0 && c.replies) 
+  $: mobileFlattenedReplies = (depth === 0 && c.replies)
     ? flattenRepliesWithParent(c.replies, c.author, c.id).sort((a, b) => new Date(a.pubDate).getTime() - new Date(b.pubDate).getTime())
     : [];
+
+  let showAllReplies = false;
+
+  $: hiddenRepliesCount = c.replies ? Math.max(0, c.replies.length - 1) : 0;
+  $: hasHiddenReplies = hiddenRepliesCount > 0;
+
+  $: hiddenMobileCount = mobileFlattenedReplies ? Math.max(0, mobileFlattenedReplies.length - 1) : 0;
+  $: hasHiddenMobileReplies = hiddenMobileCount > 0;
 </script>
 
 
@@ -322,7 +330,7 @@
     <div class="border-l border-[var(--text-color)]/50 space-y-3 w-full pl-2 md:pl-3">
     {#if !isMobile}
       {#if c.replies && c.replies.length}
-        {#each c.replies as reply}
+        {#each (showAllReplies ? c.replies : c.replies.slice(0, 1)) as reply}
           <div class="w-full max-w-full overflow-hidden mt-4 ">
             <CommentItem
               c={reply}
@@ -345,10 +353,18 @@
             />
           </div>
         {/each}
+        {#if hasHiddenReplies}
+          <div class="flex justify-start mt-3">
+            <button on:click={() => showAllReplies = !showAllReplies}
+              class="px-6 py-2.5 rounded-lg border border-[var(--button-border-color)] text-sm font-medium text-[var(--text-color)] bg-transparent hover:bg-[var(--button-hover-bg-color)] transition-all duration-300 ease-in-out">
+              {showAllReplies ? t('comments.collapseReplies') : t('comments.showMoreReplies')}
+            </button>
+          </div>
+        {/if}
       {/if}
     {:else}
       {#if depth === 0 && mobileFlattenedReplies.length > 0}
-        {#each mobileFlattenedReplies as flatReply}
+        {#each (showAllReplies ? mobileFlattenedReplies : mobileFlattenedReplies.slice(0, 1)) as flatReply}
           <div class="w-full max-w-full overflow-hidden mt-4 ">
             <CommentItem
               c={flatReply}
@@ -373,6 +389,14 @@
             />
           </div>
         {/each}
+        {#if hasHiddenMobileReplies}
+          <div class="flex justify-start mt-3">
+            <button on:click={() => showAllReplies = !showAllReplies}
+              class="px-6 py-2.5 rounded-lg border border-[var(--button-border-color)] text-sm font-medium text-[var(--text-color)] bg-transparent hover:bg-[var(--button-hover-bg-color)] transition-all duration-300 ease-in-out">
+              {showAllReplies ? t('comments.collapseReplies') : t('comments.showMoreReplies')}
+            </button>
+          </div>
+        {/if}
       {/if}
     {/if}
   </div>
