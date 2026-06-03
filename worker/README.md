@@ -10,11 +10,11 @@ Cloudflare Worker 版本基于 Cloudflare Workers + D1 + KV 实现，无需服�
 
 ## 部署
 
-<!-- 目前提供两种部署方式：1. [一键部署](#一键部署) 2. [本地部署](#本地部署)。
+目前提供两种部署方式：1. [一键部署](#一键部署) 2. [本地部署](#本地部署)。
 
-一键部署不需要 Node.js 环境，所有操作在操作面板上完成，操作过程可能会稍微复杂一点；本地部署需要用于 Node.js 环境，但是大部分配置都可以使用命令行完成，操作相对更加简单，也方便后期二次开发。可以根据自己的需求进行选择。 -->
+一键部署不需要 Node.js 环境，所有操作在操作面板上完成，操作过程可能会稍微复杂一点；本地部署需要用于 Node.js 环境，但是大部分配置都可以使用命令行完成，操作相对更加简单，也方便后期二次开发。可以根据自己的需求进行选择。
 
-<!-- ### 一键部署
+### 一键部署
 
 #### 1. 点击下方按钮进行部署
 
@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS Comment (
 CREATE INDEX IF NOT EXISTS idx_post_slug ON Comment(post_slug);
 CREATE INDEX IF NOT EXISTS idx_status ON Comment(status);
 ```
+
 ![deploy-3-D1-2](../doc/images/worker/deploy-3-D1-2.png)
 
 KV 命名空间的绑定与数据类似。左侧选择 `KV命名空间`，然后点击右下角的添加绑定。这里的变量名称一定要填写为 `MOMO_AUTH_KV`，KV 选择已有的，或者创建一个新的。完成之后点击右下角的 `添加绑定` 按钮。
@@ -84,7 +85,7 @@ KV 命名空间的绑定与数据类似。左侧选择 `KV命名空间`，然后
 
 如果成功进入后台则表示部署成功。
 
-![deploy-5](../doc/images/worker/deploy-5.png) -->
+![deploy-5](../doc/images/worker/deploy-5.png)
 
 ### 本地部署
 
@@ -95,18 +96,21 @@ KV 命名空间的绑定与数据类似。左侧选择 `KV命名空间`，然后
 两者的区别在于，Release 中包含了已经编译好的后端管理页面，如果直接克隆仓库，需要自行编译管理页面的代码然后复制到 `public` 目录下。
 
 * **克隆仓库**
-	```bash
-	git clone https://github.com/Motues/Momo-Backend.git
-	cd Momo-Backend/worker
-	pnpm install
-	```
+
+ ```bash
+ git clone https://github.com/Motues/Momo-Backend.git
+ cd Momo-Backend/worker
+ pnpm install
+ ```
+
 * **从 Release 下载代码**，可以使用命令行，也可以浏览器直接[下载](https://github.com/Motues/Momo-Backend/releases/latest/download/worker.zip)然后解压
-	```bash
-	wget https://github.com/Motues/Momo-Backend/releases/latest/download/worker.zip
-	unzip worker.zip
-	cd worker
-	pnpm install
-	```
+
+ ```bash
+ wget https://github.com/Motues/Momo-Backend/releases/latest/download/worker.zip
+ unzip worker.zip
+ cd worker
+ pnpm install
+ ```
 
 如果你选择克隆仓库的方式，则需要先编译后端管理页面的代码，位于 `/dashboard` 目录下。编译完成后，复制到 `./public` 目录下
 
@@ -114,8 +118,8 @@ KV 命名空间的绑定与数据类似。左侧选择 `KV命名空间`，然后
 cd ../dashboard
 pnpm install
 pnpm build
-cp -r ./dist ../nodejs/public
-cd ../nodejs
+cp -r ./dist ../worker/public
+cd ../worker
 ```
 
 #### 2. 配置Cloudflare Workers
@@ -125,42 +129,54 @@ cd ../nodejs
 下面介绍第一种方法。
 
 * **登录到 Cloudflare**
-	```bash
-	pnpm wrangler login
-	```
+
+ ```bash
+ pnpm wrangler login
+ ```
+
 * **创建数据库和数据库表**，如果遇到提示，请按回车继续
-	```bash
-	pnpm wrangler d1 create MOMO_DB
-	pnpm wrangler d1 execute MOMO_DB --remote --file=./schemas/comment.sql
-	```
-	运行完成后可以确认一下 `wrangler.jsonc` 中是否有如下配置
-	```jsonc
-	"d1_databases": [
-	    {
-	        "binding": "MOMO_DB",
-	        "database_name": "MOMO_DB",
-	        "database_id": "xxxxxx" // D1 数据库 ID
-	    }
-	]
-	```
-	如果`binding`字段不是`MOMO_DB`，请修改为`MOMO_DB`
+
+ ```bash
+ pnpm wrangler d1 create MOMO_DB
+ pnpm wrangler d1 execute MOMO_DB --remote --file=./schemas/comment.sql
+ ```
+
+ 运行完成后可以确认一下 `wrangler.jsonc` 中是否有如下配置
+
+ ```jsonc
+ "d1_databases": [
+     {
+         "binding": "MOMO_DB",
+         "database_name": "MOMO_DB",
+         "database_id": "xxxxxx" // D1 数据库 ID
+     }
+ ]
+ ```
+
+ 如果`binding`字段不是`MOMO_DB`，请修改为`MOMO_DB`
+
 * **创建 KV 存储**，如果遇到提示，按回车继续
-	```bash
-	pnpm wrangler kv namespace create MOMO_AUTH_KV
-	```
-	运行完成后可以确认一下 `wrangler.jsonc` 中是否有如下配置
-	```jsonc
-	"kv_namespaces": [
-	    {
-	        "binding": "MOMO_AUTH_KV",
-	        "id": "xxxxxxx" // KV 存储 ID
-	    }
-	]
-	```
+
+ ```bash
+ pnpm wrangler kv namespace create MOMO_AUTH_KV
+ ```
+
+ 运行完成后可以确认一下 `wrangler.jsonc` 中是否有如下配置
+
+ ```jsonc
+ "kv_namespaces": [
+     {
+         "binding": "MOMO_AUTH_KV",
+         "id": "xxxxxxx" // KV 存储 ID
+     }
+ ]
+ ```
+
 * **部署上线**
-	```bash
-	pnpm run deploy
-	```
+
+ ```bash
+ pnpm run deploy
+ ```
 
 没有异常报错后，可以进入Cloudflare Workers 面板查看是否部署成功，若显示存在一个名称为 `momo-backend-worker` 的项目即推送成功。
 
@@ -249,20 +265,20 @@ cd ../nodejs
 <div style="background-color: #f6f8fa; padding: 40px 20px; min-height: 100%; font-family: 'PingFang SC', 'Microsoft YaHei', Helvetica, Arial, sans-serif;">
     <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.05); overflow: hidden;">
         <div style="height: 4px; background: linear-gradient(90deg, #007acc, #00c6ff);"></div>
-        	<div style="padding: 32px;">
+         <div style="padding: 32px;">
             <h2 style="margin: 0 0 16px 0; color: #1a1a1a; font-size: 20px; line-height: 1.4;">有人在你的文章下发表了评论</h2>
             <p style="color: #555; font-size: 15px; margin-bottom: 24px; line-height: 1.6;">
-              	<strong style="color: #007acc;">{{commentAuthor}}</strong> 评论了你的文章 <b style="color: #1a1a1a;">《{{postTitle}}》</b>：
+               <strong style="color: #007acc;">{{commentAuthor}}</strong> 评论了你的文章 <b style="color: #1a1a1a;">《{{postTitle}}》</b>：
             </p>
             <div style="background-color: #f9fafb; border-radius: 8px; padding: 20px; border: 1px dashed #e1e4e8; margin-bottom: 32px;">
-              	<div style="color: #444; font-size: 15px; line-height: 1.8; word-break: break-all;">
-                	{{commentContent}}
-              	</div>
+               <div style="color: #444; font-size: 15px; line-height: 1.8; word-break: break-all;">
+                 {{commentContent}}
+               </div>
             </div>
             <div style="text-align: center;">
-              	<a href="{{postUrl}}" style="display: inline-block; background-color: #007acc; color: #ffffff; padding: 12px 32px; text-decoration: none; border-radius: 50px; font-weight: 500; font-size: 15px; transition: all 0.3s ease;">
-                	立即前往查看
-              	</a>
+               <a href="{{postUrl}}" style="display: inline-block; background-color: #007acc; color: #ffffff; padding: 12px 32px; text-decoration: none; border-radius: 50px; font-weight: 500; font-size: 15px; transition: all 0.3s ease;">
+                 立即前往查看
+               </a>
             </div>
         </div>
         <div style="background-color: #fafbfc; padding: 20px; text-align: center; border-top: 1px solid #f0f0f0;">
