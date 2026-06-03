@@ -1,0 +1,47 @@
+<svg width="400" height="400" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- 使用指定的 #3b82f6 蓝色与薄荷绿渐变 -->
+    <linearGradient id="customBlueMintGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" /> <!-- 指定蓝色 -->
+      <stop offset="100%" style="stop-color:#98ff98;stop-opacity:1" /> <!-- 薄荷绿 -->
+    </linearGradient>
+  </defs>
+
+  <!-- 1. 填充夹层区域：使用 evenodd 规则实现中间镂空 -->
+  <path d="M100 10 
+           C110 10, 120 80, 190 100 
+           C120 120, 110 190, 100 190 
+           C90 190, 80 120, 10 100 
+           C80 80, 90 10, 100 10 Z
+           M100 65 
+           C105 65, 110 90, 135 100 
+           C110 110, 105 135, 100 135 
+           C95 135, 90 110, 65 100 
+           C90 90, 95 65, 100 65 Z" 
+        fill="url(#customBlueMintGradient)" 
+        fill-rule="evenodd" />
+
+  <!-- 2. 线条部分：颜色与填充完全一致，消除边框痕迹 -->
+  <g fill="none" stroke="url(#customBlueMintGradient)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    
+    <!-- 外部圆滑轮廓 -->
+    <path d="M100 10 
+             C110 10, 120 80, 190 100 
+             C120 120, 110 190, 100 190 
+             C90 190, 80 120, 10 100 
+             C80 80, 90 10, 100 10 Z" />
+
+    <!-- 内部圆滑轮廓 -->
+    <path d="M100 65 
+             C105 65, 110 90, 135 100 
+             C110 110, 105 135, 100 135 
+             C95 135, 90 110, 65 100 
+             C90 90, 95 65, 100 65 Z" />
+
+    <!-- 顶点间的直线连接线 -->
+    <line x1="100" y1="10" x2="100" y2="65" />
+    <line x1="190" y1="100" x2="135" y2="100" />
+    <line x1="100" y1="190" x2="100" y2="135" />
+    <line x1="10" y1="100" x2="65" y2="100" />
+  </g>
+</svg>

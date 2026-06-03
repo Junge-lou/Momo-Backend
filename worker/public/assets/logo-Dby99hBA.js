@@ -1,0 +1,1 @@
+var e=`/assets/logo-BXD_iEqj.svg`;export{e as t};
