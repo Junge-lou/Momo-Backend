@@ -3,7 +3,7 @@
 	"version": "1.4.0",
 	"private": true,
 	"scripts": {
-		"build:dashboard": "cd ../dashboard && pnpm build && node -e \"const{rmSync,cpSync}=require('fs');rmSync('../worker/public',{recursive:true,force:true});cpSync('dist','../worker/public',{recursive:true})\"",
+		"build:dashboard": "node ./script/build-dashboard.js",
 		"deploy": "wrangler deploy",
 		"deploy:full": "pnpm build:dashboard && wrangler deploy",
 		"dev": "wrangler dev",

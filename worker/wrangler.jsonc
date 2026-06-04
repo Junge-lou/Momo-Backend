@@ -21,13 +21,13 @@
 	// 	{
 	// 		"binding": "MOMO_DB",
 	// 		"database_name": "MOMO_DB",
-	// 		"database_id": "111111111your1111111111"
+	// 		"database_id": "xxxxxx"
 	// 	}
 	// ],
 	// "kv_namespaces": [
 	// 	{
 	// 		"binding": "MOMO_AUTH_KV",
-	// 		"id": "11111111your11111111111"
+	// 		"id": "xxxxxx"
 	// 	}
 	// ]
 }
