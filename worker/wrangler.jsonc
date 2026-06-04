@@ -15,4 +15,19 @@
 		"directory": "./public", // 指向 Vue 编译后的文件夹
 		"not_found_handling": "single-page-application" // 关键：开启 SPA 路由支持
 	}
+	// 注意英文逗号
+	// 
+	// "d1_databases": [
+	// 	{
+	// 		"binding": "MOMO_DB",
+	// 		"database_name": "MOMO_DB",
+	// 		"database_id": "xxxxxx"
+	// 	}
+	// ],
+	// "kv_namespaces": [
+	// 	{
+	// 		"binding": "MOMO_AUTH_KV",
+	// 		"id": "xxxxxx"
+	// 	}
+	// ]
 }

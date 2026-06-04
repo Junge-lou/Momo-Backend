@@ -3,7 +3,9 @@
 	"version": "1.4.0",
 	"private": true,
 	"scripts": {
+		"build:dashboard": "node ./script/build-dashboard.js",
 		"deploy": "wrangler deploy",
+		"deploy:full": "pnpm build:dashboard && wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest",

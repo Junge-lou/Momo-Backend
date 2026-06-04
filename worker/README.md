@@ -111,11 +111,14 @@ KV 命名空间的绑定与数据类似。左侧选择 `KV命名空间`，然后
 如果你选择克隆仓库的方式，则需要先编译后端管理页面的代码，位于 `/dashboard` 目录下。编译完成后，复制到 `./public` 目录下
 
 ```bash
+pnpm build:dashboard
+
+# 或者使用以下命令逐步执行
 cd ../dashboard
 pnpm install
 pnpm build
-cp -r ./dist ../nodejs/public
-cd ../nodejs
+cp -r ./dist ../worker/public
+cd ../worker
 ```
 
 #### 2. 配置Cloudflare Workers
