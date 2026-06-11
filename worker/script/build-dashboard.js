@@ -1,7 +1,7 @@
 const { rmSync, cpSync } = require('fs');
 const path = require('path');
 
-const distDir = path.resolve(__dirname, '../dashboard/dist');
+const distDir = path.resolve(__dirname, '../../dashboard/dist');
 const publicDir = path.resolve(__dirname, '../public');
 
 try {
