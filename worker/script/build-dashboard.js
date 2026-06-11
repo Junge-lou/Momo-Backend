@@ -7,7 +7,8 @@ try {
   console.log('🚀 开始打包 dashboard...');
   execSync('pnpm build', { 
     cwd: path.resolve(__dirname, '../dashboard'), 
-    stdio: 'inherit' 
+    stdio: 'inherit',
+    shell: true
   });
 
   // 2. 定义路径
