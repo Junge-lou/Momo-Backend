@@ -14,20 +14,18 @@
 	"assets": {
 		"directory": "./public", // 指向 Vue 编译后的文件夹
 		"not_found_handling": "single-page-application" // 关键：开启 SPA 路由支持
-	}
-	// 注意英文逗号
-	// 
-	// "d1_databases": [
-	// 	{
-	// 		"binding": "MOMO_DB",
-	// 		"database_name": "MOMO_DB",
-	// 		"database_id": "xxxxxx"
-	// 	}
-	// ],
-	// "kv_namespaces": [
-	// 	{
-	// 		"binding": "MOMO_AUTH_KV",
-	// 		"id": "xxxxxx"
-	// 	}
-	// ]
+	},
+	"d1_databases": [
+		{
+			"binding": "MOMO_DB",
+			"database_name": "MOMO_DB",
+			"database_id": "1e0688ea-6b10-4d93-a6e4-d701816a4fa8"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "MOMO_AUTH_KV",
+			"id": "564d5dc56353492db9e96b1aeb0aa310"
+		}
+	]
 }
