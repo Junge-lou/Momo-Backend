@@ -1,30 +1,27 @@
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { rmSync, cpSync } = require('fs');
 const path = require('path');
 
+const dashboardDir = path.resolve(__dirname, '../dashboard');
+const distDir = path.resolve(__dirname, '../dashboard/dist');
+const publicDir = path.resolve(__dirname, '../public');
+
 try {
-  // 1. 进入 dashboard 目录并执行打包
+  // 1. 安装 dashboard 依赖并构建
   console.log('🚀 开始打包 dashboard...');
-  execSync('pnpm build', { 
-    cwd: path.resolve(__dirname, '../dashboard'), 
-    stdio: 'inherit',
-    shell: true
-  });
+  execFileSync('pnpm', ['install'], { cwd: dashboardDir, stdio: 'inherit' });
+  execFileSync('pnpm', ['build'], { cwd: dashboardDir, stdio: 'inherit' });
 
-  // 2. 定义路径
-  const targetDir = path.resolve(__dirname, '../worker/public');
-  const sourceDir = path.resolve(__dirname, '../dashboard/dist');
+  // 2. 清理旧的 public 目录
+  console.log('🧹 清理旧的静态文件...');
+  rmSync(publicDir, { recursive: true, force: true });
 
-  // 3. 清理旧的静态文件
-  console.log('🧹 正在清理旧的静态文件...');
-  rmSync(targetDir, { recursive: true, force: true });
-
-  // 4. 复制新文件
-  console.log('📦 正在复制新的构建产物...');
-  cpSync(sourceDir, targetDir, { recursive: true });
+  // 3. 复制新文件
+  console.log('📦 复制新的构建产物...');
+  cpSync(distDir, publicDir, { recursive: true });
 
   console.log('✨ Dashboard 部署准备就绪！');
-} catch (error) {
-  console.error('❌ 执行过程中出错:', error.message);
+} catch (err) {
+  console.error('❌ 构建失败:', err.message);
   process.exit(1);
 }
