@@ -18,7 +18,7 @@ Cloudflare Worker 版本基于 Cloudflare Workers + D1 + KV 实现，无需服�
 
 #### 1. 点击下方按钮进行部署
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Motues/Momo-Backend/tree/main/worker)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Junge-lou/Momo-Backend/tree/cf-blog-1/worker)
 
 注意：如果没有绑定Github账号的，可能需要进行一下绑定。
 
@@ -96,6 +96,7 @@ KV 命名空间的绑定与数据类似。左侧选择 `KV命名空间`，然后
 两者的区别在于，Release 中包含了已经编译好的后端管理页面，如果直接克隆仓库，需要自行编译管理页面的代码然后复制到 `public` 目录下。
 
 * **克隆仓库**
+
  ```bash
  git clone https://github.com/Motues/Momo-Backend.git
  cd Momo-Backend/worker
@@ -103,6 +104,7 @@ KV 命名空间的绑定与数据类似。左侧选择 `KV命名空间`，然后
  ```
 
 * **从 Release 下载代码**，可以使用命令行，也可以浏览器直接[下载](https://github.com/Motues/Momo-Backend/releases/latest/download/worker.zip)然后解压
+
  ```bash
  wget https://github.com/Motues/Momo-Backend/releases/latest/download/worker.zip
  unzip worker.zip
@@ -130,17 +132,20 @@ cd ../worker
 下面介绍第一种方法。
 
 * **登录到 Cloudflare**
+
  ```bash
  pnpm wrangler login
  ```
 
 * **创建数据库和数据库表**，如果遇到提示，请按回车继续
+
  ```bash
  pnpm wrangler d1 create MOMO_DB
  pnpm wrangler d1 execute MOMO_DB --remote --file=./schemas/comment.sql
  ```
 
-	运行完成后可以确认一下 `wrangler.jsonc` 中是否有如下配置
+ 运行完成后可以确认一下 `wrangler.jsonc` 中是否有如下配置
+
  ```jsonc
  "d1_databases": [
      {
@@ -151,13 +156,16 @@ cd ../worker
  ]
  ```
 
-	如果`binding`字段不是`MOMO_DB`，请修改为`MOMO_DB`
+ 如果`binding`字段不是`MOMO_DB`，请修改为`MOMO_DB`
+
 * **创建 KV 存储**，如果遇到提示，按回车继续
+
  ```bash
  pnpm wrangler kv namespace create MOMO_AUTH_KV
  ```
 
-	运行完成后可以确认一下 `wrangler.jsonc` 中是否有如下配置
+ 运行完成后可以确认一下 `wrangler.jsonc` 中是否有如下配置
+
  ```jsonc
  "kv_namespaces": [
      {
@@ -168,6 +176,7 @@ cd ../worker
  ```
 
 * **部署上线**
+
  ```bash
  pnpm run deploy
  ```
