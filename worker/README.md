@@ -4,8 +4,6 @@ Cloudflare Worker 版本基于 Cloudflare Workers + D1 + KV 实现，无需服�
 
 ## 部署条件
 
-/text
-
 * 拥有一个 Cloudflare 账号（使用邮箱即可注册，[官网地址](https://www.cloudflare.com/)）
 * 拥有一个 Node.js 运行环境，版本 >= 22（本地部署需要）
 * 拥有一个域名并托管在 Cloudflare 上（这个不是必须项，但可以提高国内访问速度，也更方便）
