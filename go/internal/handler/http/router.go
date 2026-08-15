@@ -62,6 +62,8 @@ func RegisterRoutes(r *gin.Engine, h *CommentHandler) {
 			auth.GET("/stats/overview", h.GetStatsOverview)
 			auth.GET("/stats/users", h.GetUserList)
 			auth.GET("/stats/users/comments", h.GetUserComments)
+			auth.POST("/users/blacklist", h.AddUserToBlacklist)
+			auth.DELETE("/users/blacklist", h.RemoveUserFromBlacklist)
 			auth.GET("/data/export/settings", h.ExportSettings)
 			auth.GET("/data/export/comments", h.ExportComments)
 			auth.POST("/data/import/comments", h.ImportComments)

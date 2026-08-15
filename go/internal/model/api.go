@@ -93,6 +93,7 @@ type UserStats struct {
 	DeletedCount     int64  `json:"deletedCount"`
 	FirstCommentDate string `json:"firstCommentDate"`
 	LastCommentDate  string `json:"lastCommentDate"`
+	Blacklisted      bool   `json:"blacklisted"`
 }
 
 // UserListData 用户列表响应数据

@@ -325,9 +325,21 @@ func (r *commentRepo) GetStatsOverview(ctx context.Context, rangeParam string) (
 	return stats, nil
 }
 
-func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int) ([]*model.UserStats, int64, error) {
+func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int, search string) ([]*model.UserStats, int64, error) {
+	search = strings.TrimSpace(search)
+
+	// 按昵称/邮箱搜索（SQLite LIKE 对 ASCII 不区分大小写）
+	where := ""
+	args := make([]interface{}, 0)
+	if search != "" {
+		like := "%" + search + "%"
+		where = " WHERE author LIKE ? OR email LIKE ?"
+		args = append(args, like, like)
+	}
+
 	var total int64
-	_ = r.db.GetContext(ctx, &total, "SELECT COUNT(*) FROM (SELECT DISTINCT author, email FROM Comment)")
+	countQuery := "SELECT COUNT(*) FROM (SELECT DISTINCT author, email FROM Comment" + where + ")"
+	_ = r.db.GetContext(ctx, &total, countQuery, args...)
 
 	type userRow struct {
 		Author        string `db:"author"`
@@ -340,7 +352,7 @@ func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int) ([]*mo
 		MaxDate       int64  `db:"max_date"`
 	}
 	var rows []userRow
-	err := r.db.SelectContext(ctx, &rows, `
+	query := `
 		SELECT
 			author, email,
 			COUNT(*) as commentCount,
@@ -349,11 +361,13 @@ func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int) ([]*mo
 			COALESCE(SUM(CASE WHEN status = 'deleted' THEN 1 ELSE 0 END), 0) as deletedCount,
 			MIN(pub_date) as min_date,
 			MAX(pub_date) as max_date
-		FROM Comment
+		FROM Comment` + where + `
 		GROUP BY author, email
 		ORDER BY commentCount DESC
 		LIMIT ? OFFSET ?
-	`, limit, offset)
+	`
+	queryArgs := append(args, limit, offset)
+	err := r.db.SelectContext(ctx, &rows, query, queryArgs...)
 	if err != nil {
 		return nil, 0, err
 	}

@@ -133,7 +133,9 @@ export async function checkEmailBlacklist(email: string): Promise<boolean> {
   if (!blacklistStr) return false;
   try {
     const blacklist = JSON.parse(blacklistStr);
-    return Array.isArray(blacklist) && blacklist.includes(email);
+    if (!Array.isArray(blacklist)) return false;
+    // 不区分大小写匹配，与拉黑接口的小写归一化保持一致
+    return blacklist.some((entry: string) => String(entry).toLowerCase() === email.toLowerCase());
   } catch {
     return false;
   }
