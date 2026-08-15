@@ -21,6 +21,7 @@ export const importComments = async (c: Context<{ Bindings: Bindings }>) => {
       if (!item.email) { errors.push(`第 ${i + 1} 条缺少 email`); continue; }
       if (!item.contentText && !item.content_text) { errors.push(`第 ${i + 1} 条缺少 contentText`); continue; }
 
+      const postSlug = item.postSlug || item.post_slug;
       const author = checkContent(item.author);
       const email = item.email;
       const rawContent = item.contentText || item.content_text;

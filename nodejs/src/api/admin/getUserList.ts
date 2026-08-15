@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import CommentService from "../../orm/commentService";
 import { checkKey, extractToken } from "../../utils/security";
-import { getQueryNumber } from "../../utils/url";
+import { getQueryNumber, getQueryString } from "../../utils/url";
 
 export default async (c: Context): Promise<Response> => {
   const authHeader = c.req.header("Authorization") || "";
@@ -13,8 +13,9 @@ export default async (c: Context): Promise<Response> => {
 
   const page = getQueryNumber(c.req.query("page"), 1);
   const limit = getQueryNumber(c.req.query("limit"), 20);
+  const search = getQueryString(c.req.query("search"), "");
 
-  const result = await CommentService.getUserList(page, limit);
+  const result = await CommentService.getUserList(page, limit, search);
 
   return c.json({
     code: 200,

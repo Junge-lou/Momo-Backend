@@ -1,6 +1,7 @@
 import { db, schema } from "./client";
 import { eq, and, inArray, desc, gte, asc, count, sql } from "drizzle-orm";
 import { Comment, CreateCommentInput, rowToComment, rowsToComments, CommentRow } from "../type/prisma";
+import { getSetting } from "../utils/settings";
 
 class CommentService {
   /*
@@ -314,8 +315,9 @@ class CommentService {
 
   /*
    * 获取用户列表（按 author + email 分组）
+   * 支持按昵称/邮箱搜索（不区分大小写），并标记邮箱是否在黑名单中
    */
-  async getUserList(page: number, limit: number) {
+  async getUserList(page: number, limit: number, search?: string) {
     // 获取所有唯一用户
     const rawUsers = db
       .select({
@@ -333,7 +335,31 @@ class CommentService {
         uniqueMap.set(key, u);
       }
     });
-    const uniqueUsers = Array.from(uniqueMap.values());
+    let uniqueUsers = Array.from(uniqueMap.values());
+
+    // 按昵称/邮箱搜索（不区分大小写）
+    const keyword = (search || "").trim().toLowerCase();
+    if (keyword) {
+      uniqueUsers = uniqueUsers.filter(
+        (u) =>
+          u.author.toLowerCase().includes(keyword) ||
+          u.email.toLowerCase().includes(keyword)
+      );
+    }
+
+    // 加载邮箱黑名单（小写归一化，用于标记用户是否已被拉黑）
+    let emailBlacklist: string[] = [];
+    const blacklistStr = await getSetting("email_blacklist");
+    if (blacklistStr) {
+      try {
+        const parsed = JSON.parse(blacklistStr);
+        if (Array.isArray(parsed)) {
+          emailBlacklist = parsed.map((e) => String(e).toLowerCase());
+        }
+      } catch {
+        // 忽略无效的黑名单数据
+      }
+    }
 
     const total = uniqueUsers.length;
     const totalPages = Math.ceil(total / limit);
@@ -375,6 +401,7 @@ class CommentService {
           deletedCount,
           firstCommentDate,
           lastCommentDate,
+          blacklisted: emailBlacklist.includes(u.email.toLowerCase()),
         };
       })
     );

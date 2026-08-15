@@ -1,6 +1,6 @@
 # Momo Backend Node.js
 
-Cloudflare Node.js 版本基于 Koa + Prisma + SQLite 实现，需要服务器进行部署。
+Cloudflare Node.js 版本基于 Hono + Drizzle + SQLite 实现，需要服务器进行部署。
 
 ## 部署条件
 

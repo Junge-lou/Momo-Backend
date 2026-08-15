@@ -16,6 +16,7 @@ import { updateComment } from './api/admin/updateComment'
 import { statsOverview } from './api/admin/statsOverview'
 import { userList } from './api/admin/userList'
 import { userComments } from './api/admin/userComments'
+import { addUserToBlacklist, removeUserFromBlacklist } from './api/admin/userBlacklist'
 import { exportSettings, exportComments } from './api/admin/dataExport'
 import { importComments, importSettings } from './api/admin/dataImport'
 
@@ -45,6 +46,8 @@ app.put('/admin/comments/edit', updateComment);
 app.get('/admin/stats/overview', statsOverview);
 app.get('/admin/stats/users', userList);
 app.get('/admin/stats/users/comments', userComments);
+app.post('/admin/users/blacklist', addUserToBlacklist);
+app.delete('/admin/users/blacklist', removeUserFromBlacklist);
 app.get('/admin/data/export/settings', exportSettings);
 app.get('/admin/data/export/comments', exportComments);
 app.post('/admin/data/import/comments', importComments);

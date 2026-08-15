@@ -8,6 +8,8 @@ import {
   getStatsOverview,
   getUserList,
   getUserComments,
+  addUserToBlacklist,
+  removeUserFromBlacklist,
   getSettings,
   updateSettings,
   changePassword,
@@ -43,6 +45,10 @@ router.post("/admin/login", login);
 router.get("/admin/stats/overview", getStatsOverview);
 router.get("/admin/stats/users", getUserList);
 router.get("/admin/stats/users/comments", getUserComments);
+
+// Admin user blacklist
+router.post("/admin/users/blacklist", addUserToBlacklist);
+router.delete("/admin/users/blacklist", removeUserFromBlacklist);
 
 // Admin data import/export
 router.post("/admin/data/import/comments", importComments);

@@ -1,11 +1,13 @@
 package http
 
 import (
+	"encoding/json"
 	"log"
 	"momo-backend-go/internal/model"
 	"momo-backend-go/internal/pkg/utils"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -481,7 +483,7 @@ func (h *CommentHandler) GetStatsOverview(c *gin.Context) {
 	})
 }
 
-// GetUserList 用户列表
+// GetUserList 用户列表（支持按昵称/邮箱搜索，标记黑名单状态）
 func (h *CommentHandler) GetUserList(c *gin.Context) {
 	pageStr := c.DefaultQuery("page", "1")
 	page, err := strconv.Atoi(pageStr)
@@ -496,11 +498,24 @@ func (h *CommentHandler) GetUserList(c *gin.Context) {
 		limit = 20
 	}
 
+	search := strings.TrimSpace(c.DefaultQuery("search", ""))
+
 	offset := (page - 1) * limit
-	users, total, err := h.Repo.GetUserList(c.Request.Context(), offset, limit)
+	users, total, err := h.Repo.GetUserList(c.Request.Context(), offset, limit, search)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "Failed to fetch users"})
 		return
+	}
+
+	// 标记邮箱黑名单状态（不区分大小写）
+	emailBlacklist := getEmailBlacklist()
+	for _, u := range users {
+		for _, entry := range emailBlacklist {
+			if strings.EqualFold(entry, u.Email) {
+				u.Blacklisted = true
+				break
+			}
+		}
 	}
 
 	totalPage := int64((total + int64(limit) - 1) / int64(limit))
@@ -520,6 +535,110 @@ func (h *CommentHandler) GetUserList(c *gin.Context) {
 			},
 		},
 	})
+}
+
+// getEmailBlacklist 读取邮箱黑名单（JSON 数组）
+func getEmailBlacklist() []string {
+	raw := utils.GetSetting("email_blacklist")
+	if raw == "" {
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return nil
+	}
+	return list
+}
+
+// AddUserToBlacklist 一键将用户（按邮箱）加入黑名单
+func (h *CommentHandler) AddUserToBlacklist(c *gin.Context) {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "Invalid request body"})
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "email is required"})
+		return
+	}
+
+	list := getEmailBlacklist()
+	for _, entry := range list {
+		if strings.EqualFold(entry, email) {
+			c.JSON(http.StatusOK, gin.H{
+				"code":    200,
+				"message": "User is already in blacklist",
+				"data":    gin.H{"email": email, "blacklisted": true},
+			})
+			return
+		}
+	}
+
+	list = append(list, email)
+	if err := utils.SetSetting("email_blacklist", mustJSON(list)); err != nil {
+		log.Printf("[ERROR] Failed to add user to blacklist: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "Failed to update blacklist"})
+		return
+	}
+	log.Printf("[WARN] User added to email blacklist: %s", email)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "User added to blacklist",
+		"data":    gin.H{"email": email, "blacklisted": true},
+	})
+}
+
+// RemoveUserFromBlacklist 将用户（按邮箱）移出黑名单
+func (h *CommentHandler) RemoveUserFromBlacklist(c *gin.Context) {
+	email := strings.ToLower(strings.TrimSpace(c.Query("email")))
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "email is required"})
+		return
+	}
+
+	list := getEmailBlacklist()
+	index := -1
+	for i, entry := range list {
+		if strings.EqualFold(entry, email) {
+			index = i
+			break
+		}
+	}
+	if index == -1 {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    200,
+			"message": "User is not in blacklist",
+			"data":    gin.H{"email": email, "blacklisted": false},
+		})
+		return
+	}
+
+	list = append(list[:index], list[index+1:]...)
+	if err := utils.SetSetting("email_blacklist", mustJSON(list)); err != nil {
+		log.Printf("[ERROR] Failed to remove user from blacklist: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "Failed to update blacklist"})
+		return
+	}
+	log.Printf("[INFO] User removed from email blacklist: %s", email)
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "User removed from blacklist",
+		"data":    gin.H{"email": email, "blacklisted": false},
+	})
+}
+
+// mustJSON 将值序列化为 JSON 字符串（失败时返回空数组）
+func mustJSON(v interface{}) string {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
 }
 
 // GetUserComments 获取指定用户的评论

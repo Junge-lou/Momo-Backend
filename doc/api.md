@@ -16,8 +16,10 @@
 | PUT | `/admin/comments/status` | 修改评论状态 |
 | PUT | `/admin/comments/edit` | 修改评论内容 |
 | GET | `/admin/stats/overview` | 统计概览 |
-| GET | `/admin/stats/users` | 用户列表 |
+| GET | `/admin/stats/users` | 用户列表（支持按昵称/邮箱搜索） |
 | GET | `/admin/stats/users/comments` | 用户的评论 |
+| POST | `/admin/users/blacklist` | 将用户（按邮箱）加入黑名单 |
+| DELETE | `/admin/users/blacklist` | 将用户（按邮箱）移出黑名单 |
 | GET | `/admin/data/export/comments` | 导出评论数据 |
 | GET | `/admin/data/export/settings` | 导出系统设置 |
 | POST | `/admin/data/import/comments` | 导入评论数据 |
@@ -447,7 +449,7 @@
 > **新字段说明**：
 > - `comment_auto_approve`：评论自动通过开关，`"true"` 表示评论直接显示，`"false"` 表示评论需审核
 > - `ip_blacklist`：IP 黑名单，JSON 数组格式，支持单个 IP 和 CIDR 网段（如 `"192.168.1.0/24"`）
-> - `email_blacklist`：邮箱黑名单，JSON 数组格式，精确匹配邮箱地址
+> - `email_blacklist`：邮箱黑名单，JSON 数组格式，不区分大小写匹配邮箱地址（可通过用户列表一键拉黑）
 
 **响应（成功）**：
 ```json
@@ -739,13 +741,16 @@
 
 ### 用户列表 (GET `/admin/stats/users`)
 
-> 按用户名+邮箱唯一标识用户，显示每个用户的评论统计
+> 按用户名+邮箱唯一标识用户，显示每个用户的评论统计，并标记邮箱是否已被拉黑
 
 **查询参数**：
 - `page`：查询页数（默认 1）
 - `limit`：每页用户数（默认 20）
+- `search`：搜索关键字（可选），按昵称或邮箱模糊匹配（不区分大小写）
 
 **响应（成功）**：
+`GET /admin/stats/users?search=张三`
+
 ```json
 {
   "code": 200,
@@ -760,7 +765,8 @@
         "pendingCount": 2,
         "deletedCount": 1,
         "firstCommentDate": "2024-01-01T00:00:00.000Z",
-        "lastCommentDate": "2026-04-27T10:00:00.000Z"
+        "lastCommentDate": "2026-04-27T10:00:00.000Z",
+        "blacklisted": false
       }
     ],
     "pagination": {
@@ -768,6 +774,82 @@
       "limit": 20,
       "totalPage": 2
     }
+  }
+}
+```
+
+> `blacklisted` 为 `true` 表示该用户的邮箱已在邮箱黑名单中，无法再提交评论。
+
+### 将用户加入黑名单 (POST `/admin/users/blacklist`)
+
+> 一键将用户加入黑名单：将用户的邮箱写入 `email_blacklist` 设置（不区分大小写），加入后该邮箱将无法提交评论。可在"安全设置"的邮箱黑名单中统一管理。
+
+**请求体**：
+```json
+{
+  "email": "spam@example.com"
+}
+```
+
+**响应（成功）**：
+```json
+{
+  "code": 200,
+  "message": "User added to blacklist",
+  "data": {
+    "email": "spam@example.com",
+    "blacklisted": true
+  }
+}
+```
+
+**响应（重复拉黑）**：
+```json
+{
+  "code": 200,
+  "message": "User is already in blacklist",
+  "data": {
+    "email": "spam@example.com",
+    "blacklisted": true
+  }
+}
+```
+
+**响应（失败）**：
+```json
+{
+  "code": 400,
+  "message": "email is required"
+}
+```
+
+### 将用户移出黑名单 (DELETE `/admin/users/blacklist`)
+
+**查询参数**：
+- `email`：邮箱地址（必需）
+
+**响应（成功）**：
+`DELETE /admin/users/blacklist?email=spam@example.com`
+
+```json
+{
+  "code": 200,
+  "message": "User removed from blacklist",
+  "data": {
+    "email": "spam@example.com",
+    "blacklisted": false
+  }
+}
+```
+
+**响应（不在黑名单中）**：
+```json
+{
+  "code": 200,
+  "message": "User is not in blacklist",
+  "data": {
+    "email": "spam@example.com",
+    "blacklisted": false
   }
 }
 ```

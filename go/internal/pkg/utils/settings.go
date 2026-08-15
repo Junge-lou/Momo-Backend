@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/jmoiron/sqlx"
@@ -177,7 +178,7 @@ func CheckIPBlacklist(ip string) bool {
 	return false
 }
 
-// CheckEmailBlacklist 检查邮箱是否在黑名单中
+// CheckEmailBlacklist 检查邮箱是否在黑名单中（不区分大小写）
 func CheckEmailBlacklist(email string) bool {
 	raw := GetSetting("email_blacklist")
 	if raw == "" {
@@ -188,7 +189,7 @@ func CheckEmailBlacklist(email string) bool {
 		return false
 	}
 	for _, entry := range list {
-		if entry == email {
+		if strings.EqualFold(entry, email) {
 			return true
 		}
 	}
