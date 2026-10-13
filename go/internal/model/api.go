@@ -2,15 +2,16 @@ package model
 
 // CommentRequest 提交评论请求体
 type CommentRequest struct {
-	PostSlug  string `json:"post_slug" binding:"required"`
-	Author    string `json:"author" binding:"required"`
-	Email     string `json:"email" binding:"required,email"`
-	URL       string `json:"url"`
-	Content   string `json:"content" binding:"required"`
-	ParentID  *int64 `json:"parent_id"`
-	PostURL   string `json:"post_url"`
-	PostTitle string `json:"post_title"`
-	AdminKey  string `json:"admin_key"`
+	PostSlug     string `json:"post_slug" binding:"required"`
+	Author       string `json:"author" binding:"required"`
+	Email        string `json:"email" binding:"required,email"`
+	URL          string `json:"url"`
+	Content      string `json:"content" binding:"required"`
+	ParentID     *int64 `json:"parent_id"`
+	PostURL      string `json:"post_url"`
+	PostTitle    string `json:"post_title"`
+	AdminKey     string `json:"admin_key"`
+	VerifyTicket string `json:"verify_ticket"`
 }
 
 // LoginRequest 登录请求体
@@ -94,6 +95,10 @@ type UserStats struct {
 	FirstCommentDate string `json:"firstCommentDate"`
 	LastCommentDate  string `json:"lastCommentDate"`
 	Blacklisted      bool   `json:"blacklisted"`
+	// EmailVerified 该邮箱是否已通过邮箱验证（EmailVerification 中存在 verified = 1 的记录）
+	EmailVerified bool `json:"emailVerified"`
+	// EmailVerifiedAt 最近一次验证通过时间，未验证时为空字符串
+	EmailVerifiedAt string `json:"emailVerifiedAt"`
 }
 
 // UserListData 用户列表响应数据

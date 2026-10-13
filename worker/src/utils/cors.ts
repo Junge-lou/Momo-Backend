@@ -11,35 +11,42 @@ export const parseAllowedOrigins = (allowOriginStr: string | undefined): string[
 
 export const customCors = (allowOriginStr: string | undefined) => {
   // 1. 将环境变量字符串解析为数组
-  // 如果环境变量不存在，则默认为空数组
+  // 如果环境变量不存在，则默认为空数组（即拒绝所有跨域请求）
   const allowedOrigins = parseAllowedOrigins(allowOriginStr)
+
+  // 显式配置 * 时按通配处理
+  const allowAll = allowedOrigins.includes('*')
 
   return cors({
     origin: (origin) => {
-      // 如果请求的 origin 在白名单中，或者是本地文件(null)
-      if (!origin || allowedOrigins.includes(origin)) {
-        return origin
-      }
+      if (!origin) return origin
+      if (allowAll) return '*'
+      // 精确匹配白名单
+      if (allowedOrigins.includes(origin)) return origin
+      return undefined
     },
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     exposeHeaders: ['Content-Length'],
     maxAge: 600,
-    credentials: true,
+    // 不启用 credentials：管理接口一律使用 Authorization: Bearer，
+    // 同时下发 Allow-Origin: * 与 Allow-Credentials: true 在浏览器中本就是无效组合。
+    credentials: false,
   })
 }
 
 /**
- * 服务端来源校验。
+ * 服务端来源校验（与 customCors 共用 allow_origin 白名单）。
  *
  * CORS 只是浏览器机制：白名单外的 Origin 只是拿不到 ACAO 响应头，请求本身
  * 依旧会被执行——第三方站点完全可以绕过浏览器（例如用自己的 Worker 做
  * 服务器对服务器转发）来冒用公开写接口。此校验在服务端直接拒绝这类请求：
  *
- * - allow_origin 未配置（空）或包含 * 时不限制（保持默认开放行为）；
- * - Origin 存在：必须与白名单精确匹配（协议 + 域名 + 端口）；
- * - 否则 Referer 存在：取其 origin 部分匹配白名单，无法解析的 Referer 直接拒绝；
- * - 两者都不存在（curl、服务端集成等非浏览器客户端）：放行。
+ * - allow_origin 未配置（空）或配置为 *：不限制（前者保持历史开放行为，
+ *   未配置时跨域读取在浏览器侧本就未被放行）；
+ * - 否则：Origin 须与白名单精确匹配（协议 + 域名 + 端口）；无 Origin 时取
+ *   Referer 的 origin 部分匹配，无法解析的 Referer 直接拒绝；
+ * - Origin/Referer 皆无（curl、服务端集成等非浏览器客户端）：放行。
  */
 export async function isRequestOriginAllowed(
   env: Bindings,

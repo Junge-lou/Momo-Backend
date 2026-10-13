@@ -42,7 +42,19 @@ vim ./config/config.yaml
 ```yaml
 # ./config/config.yaml
 PORT: 3000  # server port
+# TRUST_PROXY: true  # 可选：是否信任反向代理下发的客户端 IP 头
 ```
+
+> **TRUST_PROXY 说明**：该开关默认由后台页面控制，**无需修改配置文件**：
+> 进入「系统设置 → 安全设置 → 客户端 IP 识别」即可开启/关闭，设置保存在数据库中。
+> 只有在需要强制指定（例如不可变部署）时才在此填写或使用环境变量 `TRUST_PROXY`，
+> 优先级为：环境变量 > 配置文件 > 页面设置。
+>
+> - 关闭时（默认）后端只使用 TCP 连接对端地址，
+>   伪造 `CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For` 无法绕过
+>   IP 黑名单、登录失败锁定、评论频率限制与公开评论列表限流（同一 IP 每分钟 120 次）。
+> - **部署在 Nginx / Cloudflare 之后时必须开启**，否则所有请求会被识别为代理 IP。
+>   开启后 `X-Forwarded-For` 取**最右一跳**，客户端伪造的前置条目不会生效。
 
 启动成功后，访问 `http://localhost:3000`
 
@@ -63,7 +75,7 @@ PORT: 3000  # server port
 | `SMTP 端口` | SMTP 端口，默认为 465，**如果不需要邮件服务可以不填** |
 | `邮箱用户名` | SMTP 用户名，**如果不需要邮件服务可以不填** |
 | `邮箱密码` | SMTP 密码，**如果不需要邮件服务可以不填** |
-| `安全连接 (SSL/TLS)` | SMTP 是否使用 SSL，默认为 true |
+| `安全连接 (SSL/TLS)` | SMTP 是否使用 SSL。后台面板新建配置时默认勾选 `true`；若该设置从未保存过，后端按 `false` 处理 |
 
 ## Docker 部署
 
@@ -122,7 +134,7 @@ docker run -d \
         <div style="padding: 30px;">
             <h2 style="margin-top: 0; color: #333; font-size: 18px;">Hi {{toName}}，</h2>
             <p style="color: #555; line-height: 1.6;">
-              <strong>{{replyAuthor}}</strong> 回复了你在 <span style="color: #007acc;">《{{postTitle}}》</span> 中的评论：
+              <strong>{{replyAuthor}}</strong> 回复了您在 <span style="color: #007acc;">《{{postTitle}}》</span> 中的评论：
             </p>
             <div style="margin: 20px 0; padding: 12px 16px; border-left: 4px solid #dfe3e8; background-color: #fcfcfc; color: #555; font-size: 14px;">
               {{parentComment}}
@@ -160,9 +172,9 @@ docker run -d \
     <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.05); overflow: hidden;">
         <div style="height: 4px; background: linear-gradient(90deg, #007acc, #00c6ff);"></div>
         	<div style="padding: 32px;">
-            <h2 style="margin: 0 0 16px 0; color: #1a1a1a; font-size: 20px; line-height: 1.4;">有人在你的文章下发表了评论</h2>
+            <h2 style="margin: 0 0 16px 0; color: #1a1a1a; font-size: 20px; line-height: 1.4;">有人在您的文章下发表了评论</h2>
             <p style="color: #555; font-size: 15px; margin-bottom: 24px; line-height: 1.6;">
-              	<strong style="color: #007acc;">{{commentAuthor}}</strong> 评论了你的文章 <b style="color: #1a1a1a;">《{{postTitle}}》</b>：
+              	<strong style="color: #007acc;">{{commentAuthor}}</strong> 评论了您的文章 <b style="color: #1a1a1a;">《{{postTitle}}》</b>：
             </p>
             <div style="background-color: #f9fafb; border-radius: 8px; padding: 20px; border: 1px dashed #e1e4e8; margin-bottom: 32px;">
               	<div style="color: #444; font-size: 15px; line-height: 1.8; word-break: break-all;">
@@ -194,12 +206,15 @@ docker run -d \
 
 如果使用 Ngnix 和 Cloudflare 做反向代理，需要按照下面的配置 ngnix，确保可以获取到正确的 IP 地址
 
+> 配置了下面的代理头之后，请同时在后台开启「安全设置 → 客户端 IP 识别 → 信任反向代理下发的 IP 头」
+> （或在 `./config/config.yaml` 中写 `TRUST_PROXY: true` 强制指定），否则后端只会使用代理自身的 IP。
+
 ```nginx
 server {
     server_name api.example.com; # 这里修改为你的域名
 
     location / {
-        proxy_pass http://localhost:17172; # 这里修改为实际端口号
+        proxy_pass http://localhost:3000; # 这里修改为实际端口号
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';

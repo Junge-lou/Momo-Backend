@@ -3,7 +3,9 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 
@@ -22,6 +24,15 @@ var (
 	settingsOnce sync.Once
 )
 
+// allowedSettings 是后台可读写设置键的**唯一数据源**（与 Node、Worker 三端一致）。
+//
+// 历史上 handler 层的 GetSettings/UpdateSettings 各自维护了一份副本，
+// 本文件还留了一份过期副本（缺 placeholder_*、admin_comment_key(_enabled)、
+// email_verify_enabled、verify_base_url、comment_verify_(enabled|difficulty)、trust_proxy），
+// 三处容易互相漂移。现在统一收敛到这里，handler 只通过
+// IsAllowedSetting / AllowedSettingKeys 访问。
+//
+// 新增设置项时只改这一处。
 var allowedSettings = map[string]bool{
 	"site_name":             true,
 	"admin_email":           true,
@@ -36,10 +47,47 @@ var allowedSettings = map[string]bool{
 	"reply_template":        true,
 	"notification_template": true,
 	"comment_auto_approve":  true,
-	"ip_blacklist":          true,
-	"email_blacklist":       true,
-	"blogger_badge_enabled": true,
-	"blogger_badge_text":    true,
+	// 审核自动化（垃圾规则）：与 comment_auto_approve 合并为一个开关
+	"comment_spam_keywords":          true,
+	"comment_spam_max_links":         true,
+	"comment_spam_min_length":        true,
+	"comment_spam_duplicate_window":  true,
+	"ip_blacklist":                   true,
+	"email_blacklist":                true,
+	"blogger_badge_enabled":          true,
+	"blogger_badge_text":             true,
+	"placeholder_name":               true,
+	"placeholder_email":              true,
+	"placeholder_content":            true,
+	"placeholder_url":                true,
+	"admin_comment_key":              true,
+	"admin_comment_key_enabled":      true,
+	"email_verify_enabled":           true,
+	"verify_base_url":                true,
+	"comment_verify_enabled":         true,
+	"comment_verify_difficulty":      true,
+	"comment_verify_instr_enabled":   true,
+	"comment_verify_block_automated": true,
+	// 认证记录（无感验证落库）：保留天数与「是否记录签发事件」
+	"comment_verify_retention_days": true,
+	"comment_verify_log_challenge":  true,
+	"trust_proxy":                   true,
+}
+
+// IsAllowedSetting 判断某个设置键是否允许通过后台接口读写。
+func IsAllowedSetting(key string) bool {
+	return allowedSettings[key]
+}
+
+// AllowedSettingKeys 返回全部允许的设置键。
+// 返回值已排序，保证接口输出稳定（不依赖 map 迭代顺序）。
+func AllowedSettingKeys() []string {
+	keys := make([]string, 0, len(allowedSettings))
+	for k := range allowedSettings {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func InitSettingsDB(db *sqlx.DB) {
@@ -103,8 +151,13 @@ func CheckAdminCredentials(name, password string) bool {
 	dbPass := GetSetting("admin_password")
 
 	if dbName != "" && dbPass != "" {
-		// bcrypt hash 检测
-		if len(dbPass) > 0 && dbPass[0] == '$' {
+		// bcrypt hash 检测（三端统一为 $2 前缀，避免明文以 $ 开头时被永久拒绝登录）
+		if strings.HasPrefix(dbPass, "$2") {
+			// 哈希分支同样必须校验用户名：否则同一密码可用任意用户名登录，
+			// 并产生多个并存的会话
+			if name != dbName {
+				return false
+			}
 			err := bcrypt.CompareHashAndPassword([]byte(dbPass), []byte(password))
 			return err == nil
 		}
@@ -163,6 +216,8 @@ func CheckIPBlacklist(ip string) bool {
 	}
 	var list []string
 	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		// 配置损坏：保持放行（避免因一条坏配置导致全站无法评论），但必须留下告警
+		log.Printf("[WARN] ip_blacklist 不是合法 JSON，黑名单检查已被跳过，请在后台修复该配置: %v", err)
 		return false
 	}
 	for _, entry := range list {
@@ -178,6 +233,46 @@ func CheckIPBlacklist(ip string) bool {
 	return false
 }
 
+// IsValidIpOrCidr 校验单条黑名单条目是否为合法 IP 或 CIDR
+func IsValidIpOrCidr(entry string) bool {
+	value := strings.TrimSpace(entry)
+	if value == "" {
+		return false
+	}
+	if !strings.Contains(value, "/") {
+		return net.ParseIP(value) != nil
+	}
+	_, _, err := net.ParseCIDR(value)
+	return err == nil
+}
+
+// ValidateIPBlacklistJSON 校验黑名单 JSON 字符串（必须是数组且每项为合法 IP/CIDR）
+func ValidateIPBlacklistJSON(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return false
+	}
+	for _, entry := range list {
+		if !IsValidIpOrCidr(entry) {
+			return false
+		}
+	}
+	return true
+}
+
+// IsValidCommentStatus 评论状态枚举白名单
+func IsValidCommentStatus(status string) bool {
+	switch status {
+	case "pending", "approved", "rejected", "deleted":
+		return true
+	default:
+		return false
+	}
+}
+
 // CheckEmailBlacklist 检查邮箱是否在黑名单中（不区分大小写）
 func CheckEmailBlacklist(email string) bool {
 	raw := GetSetting("email_blacklist")
@@ -186,6 +281,7 @@ func CheckEmailBlacklist(email string) bool {
 	}
 	var list []string
 	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		log.Printf("[WARN] email_blacklist 不是合法 JSON，黑名单检查已被跳过，请在后台修复该配置: %v", err)
 		return false
 	}
 	for _, entry := range list {
@@ -197,6 +293,9 @@ func CheckEmailBlacklist(email string) bool {
 }
 
 // GetCommentStatus 根据设置返回评论状态（pending/approved）
+//
+// 只反映 comment_auto_approve 开关本身；审核自动化（垃圾规则）的判定在
+// handler 层叠加，见 utils.EvaluateSpamRules。
 func GetCommentStatus() string {
 	val := GetSetting("comment_auto_approve")
 	if val == "false" {

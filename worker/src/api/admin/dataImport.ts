@@ -1,13 +1,18 @@
 import { Context } from 'hono';
 import { Bindings } from '../../bindings';
 import { setSetting } from '../../utils/settings';
-import { checkContent } from '../public/postComment';
-import { parseMarkdown } from '../../utils/markdown';
+import { checkContent, sanitizeUrl, isValidIpBlacklistJson, MAX_CONTENT, MAX_AUTHOR, MAX_EMAIL, MAX_URL, MAX_POST_SLUG } from '../../utils/security';
+import { parseMarkdown, sanitizeHtml } from '../../utils/markdown';
+import { validateSpamSettings } from '../../utils/spam';
+import { toMillis } from '../../utils/time';
+
+// 导入时不允许用空值覆盖已有值的敏感字段
+const SENSITIVE_SETTINGS = new Set(["email_password", "admin_comment_key"]);
 
 export const importComments = async (c: Context<{ Bindings: Bindings }>) => {
   const body = await c.req.json<{ comments: Record<string, any>[] }>();
   if (!body?.comments || !Array.isArray(body.comments)) {
-    return c.json({ code: 400, message: "请求体须包含 comments 数组" });
+    return c.json({ code: 400, message: "请求体须包含 comments 数组" }, 400);
   }
 
   let imported = 0;
@@ -21,16 +26,32 @@ export const importComments = async (c: Context<{ Bindings: Bindings }>) => {
       if (!item.email) { errors.push(`第 ${i + 1} 条缺少 email`); continue; }
       if (!item.contentText && !item.content_text) { errors.push(`第 ${i + 1} 条缺少 contentText`); continue; }
 
-      const postSlug = item.postSlug || item.post_slug;
-      const author = checkContent(item.author);
-      const email = item.email;
-      const rawContent = item.contentText || item.content_text;
+      // 导入路径同样必须净化：数据可能来自不可信文件
+      const postSlug = checkContent(String(item.postSlug || item.post_slug));
+      const author = checkContent(String(item.author));
+      const email = String(item.email);
+      const rawContent = String(item.contentText || item.content_text);
       const contentText = checkContent(rawContent);
-      const contentHtml = parseMarkdown(rawContent);
-      const pubDate = item.pubDate || item.pub_date || new Date().toISOString();
-      const status = item.status || 'approved';
+
+      if (
+        postSlug.length > MAX_POST_SLUG ||
+        author.length > MAX_AUTHOR ||
+        email.length > MAX_EMAIL ||
+        contentText.length > MAX_CONTENT ||
+        (item.url && String(item.url).length > MAX_URL)
+      ) {
+        errors.push(`第 ${i + 1} 条字段超出长度限制`);
+        continue;
+      }
+
+      // 不信任导入文件中的 contentHtml：统一由正文重新渲染并净化
+      const contentHtml = sanitizeHtml(parseMarkdown(contentText));
+      // pub_date 兼容毫秒整数与 ISO 字符串，无法解析时退回当前时间（三端契约一致）
+      const pubDate = toMillis(item.pubDate ?? item.pub_date) ?? Date.now();
+      // 缺省状态与三端表默认值对齐：pending（最安全）
+      const status = item.status || 'pending';
       const parentId = item.parentId || item.parent_id || null;
-      const url = item.url || null;
+      const url = sanitizeUrl(item.url) || null;
       const ipAddress = item.ipAddress || item.ip_address || null;
       const os = item.os || null;
       const browser = item.browser || null;
@@ -57,7 +78,7 @@ export const importComments = async (c: Context<{ Bindings: Bindings }>) => {
 export const importSettings = async (c: Context<{ Bindings: Bindings }>) => {
   const body = await c.req.json<Record<string, string>>();
   if (!body || typeof body !== "object") {
-    return c.json({ code: 400, message: "请提供有效的设置数据" });
+    return c.json({ code: 400, message: "请提供有效的设置数据" }, 400);
   }
 
   const allowList = new Set([
@@ -66,6 +87,10 @@ export const importSettings = async (c: Context<{ Bindings: Bindings }>) => {
     "allow_origin", "email_enabled",
     "reply_template", "notification_template",
     "comment_auto_approve",
+    "comment_spam_keywords",
+    "comment_spam_max_links",
+    "comment_spam_min_length",
+    "comment_spam_duplicate_window",
     "ip_blacklist",
     "email_blacklist",
     "blogger_badge_enabled",
@@ -78,14 +103,32 @@ export const importSettings = async (c: Context<{ Bindings: Bindings }>) => {
     "admin_comment_key_enabled",
     "email_verify_enabled",
     "verify_base_url",
+    "comment_verify_enabled",
+    "comment_verify_difficulty",
+    "comment_verify_instr_enabled",
+    "comment_verify_block_automated",
+    "comment_verify_retention_days",
+    "comment_verify_log_challenge",
+    "trust_proxy",
   ]);
+
+  if ("ip_blacklist" in body && !isValidIpBlacklistJson(String(body.ip_blacklist ?? ""))) {
+    return c.json({ code: 400, message: "ip_blacklist must be a JSON array of valid IP or CIDR strings" }, 400);
+  }
+
+  // 导入文件可能来自不可信来源：审核自动化规则同样要在入口校验
+  const spamError = validateSpamSettings(body);
+  if (spamError) {
+    return c.json({ code: 400, message: spamError }, 400);
+  }
 
   const updated: string[] = [];
   for (const [key, value] of Object.entries(body)) {
-    if (allowList.has(key) && value !== undefined && value !== null) {
-      await setSetting(c.env, key, String(value));
-      updated.push(key);
-    }
+    if (!allowList.has(key) || value === undefined || value === null) continue;
+    // 导出的敏感字段是空串：留空表示「未修改」，不得覆盖已有值
+    if (SENSITIVE_SETTINGS.has(key) && String(value) === "") continue;
+    await setSetting(c.env, key, String(value));
+    updated.push(key);
   }
 
   return c.json({

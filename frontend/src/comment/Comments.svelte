@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import CommentItem from './CommentItem.svelte';
+  import SilentVerify from '../verify/SilentVerify.svelte';
   import i18nit from '../i18n/translation';
   import { parseMarkdown, validateMarkdown } from '../utils/markdown';
   import { fly } from 'svelte/transition';
+  import DOMPurify from 'dompurify';
+  import { notify } from '../utils/notify';
 
   export let postSlug: string;
   export let language: string = 'zh-cn';
@@ -31,6 +34,18 @@
   let adminKey = '';
   let isAdminEmail = false;
 
+  // 无感验证（Turnstile 风格）：默认关闭，由后端 verify_enabled 决定是否渲染
+  let verifyEnabled = false;
+  let verifyHoneypot = '';
+  // null = 尚未通过验证（按钮禁用）；'' = 后端已关闭验证，放行；其他 = 有效票据
+  let verifyTicket: string | null = null;
+  let verifyComponent: SilentVerify;
+
+  /** 把后端下发的字符串开关解析为布尔值 */
+  function parseBool(value: any): boolean {
+    return value === true || value === 'true';
+  }
+
   $: if (email && adminEmailHash) {
     sha256(email).then(hash => { isAdminEmail = hash === adminEmailHash; });
   } else {
@@ -45,6 +60,8 @@
   let submitting = false;
 
   let replyingToId: number | null = null;
+  // 正在提交回复的评论 ID（由父组件统一管理，供 CommentItem 显示提交中状态）
+  let replySubmittingId: number | null = null;
 
   let showPreview = false;
   let previewHtml = '';
@@ -92,13 +109,28 @@
     }
   }
 
+  /** 清除草稿；浏览器禁用站点存储时忽略异常，不能因此影响输入框清空 */
+  function clearDraft() {
+    try {
+      localStorage.removeItem(STORAGE_KEY_DRAFT);
+    } catch (e) {
+      console.warn('Failed to clear draft from localStorage:', e);
+    }
+  }
+
   // Auto-save user info and content draft on every change
   $: if (loaded) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ author, email, url }));
-    if (content) {
-      localStorage.setItem(STORAGE_KEY_DRAFT, content);
-    } else {
-      localStorage.removeItem(STORAGE_KEY_DRAFT);
+    // 存储被禁用（隐私模式 / 站点数据被屏蔽）时 setItem 会抛错，
+    // 这里必须吞掉，否则异常会中断本次渲染，导致输入框清空等更新不生效
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ author, email, url }));
+      if (content) {
+        localStorage.setItem(STORAGE_KEY_DRAFT, content);
+      } else {
+        localStorage.removeItem(STORAGE_KEY_DRAFT);
+      }
+    } catch (e) {
+      console.warn('Failed to persist comment draft:', e);
     }
   }
 
@@ -124,50 +156,74 @@
     return count;
   }
 
-  async function loadComments(loadMore = false) {
+  /**
+   * 拉取评论。
+   * @param loadMore 是否为「加载更多」（决定使用 loadingMore 还是 loading 状态）
+   * @param targetPage 目标页码（默认当前页）；成功后才会推进 page，保证失败可重试
+   * @param silent 静默刷新：不切换 loading 状态（列表不会整块被「正在加载评论...」顶掉），
+   *               仅在请求成功后替换列表数据。提交评论后的刷新走这条路径。
+   * @returns 是否成功
+   */
+  async function loadComments(loadMore = false, targetPage: number = page, silent = false): Promise<boolean> {
+    const showLoading = !silent;
     if (loadMore) {
       loadingMore = true;
-    } else {
+    } else if (showLoading) {
       loading = true;
     }
     try {
       const res = await fetch(
-        `${apiUrl}/api/comments?post_slug=${encodeURIComponent(postSlug)}&nested=true&page=${page}&limit=${limit}`
+        `${apiUrl}/api/comments?post_slug=${encodeURIComponent(postSlug)}&nested=true&page=${targetPage}&limit=${limit}`
       );
-      if (!res.ok) throw new Error(t('comments.loadFailed'));
+      // 只抛出 HTTP 状态，避免与渲染处的「加载失败」文案重复
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      const newComments = data.data?.comments || [];
-      if (page === 1) {
+      const newComments = data?.data?.comments || [];
+      if (targetPage === 1) {
         comments = newComments;
       } else {
         comments = [...comments, ...newComments];
       }
-      hasMore = data.data.pagination.totalPage > page;
-      bloggerBadgeEnabled = data.data.blogger_badge_enabled === 'true';
-      bloggerBadgeText = data.data.blogger_badge_text || '';
-      placeholderName = data.data.placeholder_name || '';
-      placeholderEmail = data.data.placeholder_email || '';
-      placeholderContent = data.data.placeholder_content || '';
-      placeholderUrl = data.data.placeholder_url || '';
-      adminCommentKeyConfigured = data.data.admin_comment_key_configured === 'true';
-      adminEmailHash = data.data.admin_email_hash || '';
+      hasMore = (data?.data?.pagination?.totalPage || 0) > targetPage;
+      bloggerBadgeEnabled = data?.data?.blogger_badge_enabled === 'true';
+      bloggerBadgeText = data?.data?.blogger_badge_text || '';
+      placeholderName = data?.data?.placeholder_name || '';
+      placeholderEmail = data?.data?.placeholder_email || '';
+      placeholderContent = data?.data?.placeholder_content || '';
+      placeholderUrl = data?.data?.placeholder_url || '';
+      adminCommentKeyConfigured = data?.data?.admin_comment_key_configured === 'true';
+      adminEmailHash = data?.data?.admin_email_hash || '';
       if (!adminCommentKeyConfigured) adminKey = '';
+      verifyEnabled = parseBool(data?.data?.verify_enabled);
+      verifyHoneypot = data?.data?.verify_honeypot || '';
+      // 成功后必须重置错误态：否则一次失败会让评论区在本次会话内再也不显示
+      error = '';
+      page = targetPage;
+      return true;
     } catch (err: any) {
-      error = err.message;
+      // 静默刷新失败时保留已渲染的列表与原有错误态，不把界面切成错误页
+      if (!silent) error = err?.message || t('comments.loadFailed');
+      return false;
     } finally {
       if (loadMore) {
         loadingMore = false;
-      } else {
+      } else if (showLoading) {
         loading = false;
       }
     }
   }
 
+  /** 加载下一页：只有请求成功才推进页码，失败时保持原页码可重试 */
+  async function loadMoreComments() {
+    if (loadingMore) return;
+    await loadComments(true, page + 1);
+  }
+
   async function submitComment(parentId: number | null = null, replyData: any = null) {
     if (submitting) return;
-    
+
     let submitAuthor, submitEmail, submitUrl, submitContent, submitAdminKey;
-    
+
     if (replyData) {
       submitAuthor = replyData.author;
       submitEmail = replyData.email;
@@ -183,19 +239,22 @@
     }
 
     if (!submitAuthor || !submitEmail || !submitContent) {
-      alert(t('comments.fillRequired'));
+      notify(t('comments.fillRequired'));
       return;
     }
 
     if (!isContentWithinLimit(submitContent)) {
-      alert(t('comments.contentTooLong'));
+      notify(t('comments.contentTooLong'));
       return;
     }
 
     if (!parentId) {
       submitting = true;
+    } else {
+      // 回复表单的提交状态由父组件统一管理，避免子组件状态残留导致按钮被永久禁用
+      replySubmittingId = parentId;
     }
-    
+
     try {
       const res = await fetch(`${apiUrl}/api/comments`, {
         method: 'POST',
@@ -210,34 +269,56 @@
           post_url: window.location.href,
           post_title: postTitle,
           admin_key: submitAdminKey || undefined,
+          verify_ticket: verifyTicket || undefined,
         }),
       });
-      const data = await res.json();
-      if (data.message && data.message.includes('Verification email sent')) {
-        alert(t('comments.submitSuccess') + ' ' + t('comments.verificationRequired'));
-      } else {
-        alert(data.message || t('comments.submitSuccess'));
+      // 响应体解析失败（空响应/非 JSON）时按 HTTP 状态码判断，避免把成功误判为失败
+      const data = await res.json().catch(() => null);
+
+      // 人机验证票据失效：重置状态并让验证框重新验证（不清空输入，用户可直接重试）
+      if (res.status === 403 && (data?.reason === 'VERIFY_REQUIRED' || data?.code === 'VERIFY_REQUIRED')) {
+        verifyTicket = null;
+        verifyComponent?.retry();
+        notify(t('comments.verifyFailed') + '，' + t('comments.verifyRetry'));
+        return;
       }
-      
+
+      // 只有真正提交成功才清空输入框；失败时保留用户已输入的内容，避免丢失
+      const succeeded = res.ok && (data?.code === undefined || data.code === 200);
+      if (!succeeded) {
+        notify(data?.message || t('comments.submitFailed'));
+        return;
+      }
+
+      // 先清空输入框，再弹提示：这样即便 alert 被宿主页面拦截/抛错，
+      // 也不会出现「提交成功但内容还留在输入框里」的情况
       if (!replyData) {
         content = '';
-        localStorage.removeItem(STORAGE_KEY_DRAFT);
+        previewHtml = '';
+        markdownWarnings = [];
+        showPreview = false;
+        clearDraft();
         saveUserInfoToStorage();
       }
       replyingToId = null;
-      
-      await loadComments();
+
+      if (data?.message && data.message.includes('Verification email sent')) {
+        notify(t('comments.submitSuccess') + ' ' + t('comments.verificationRequired'));
+      } else {
+        notify(data?.message || t('comments.submitSuccess'));
+      }
+
+      // 只刷新评论列表（静默），不整块切回「正在加载评论...」，也不影响已展开的回复
+      await loadComments(false, 1, true);
     } catch (err) {
-      alert(t('comments.submitFailed'));
+      notify(t('comments.submitFailed'));
     } finally {
       if (!parentId) {
         submitting = false;
+      } else if (replySubmittingId === parentId) {
+        replySubmittingId = null;
       }
     }
-  }
-
-  async function handleCommentDelete(e: CustomEvent) {
-    await loadComments();
   }
 
   function setReplyingTo(id: number | null) {
@@ -277,8 +358,8 @@
 
         {#if adminCommentKeyConfigured && isAdminEmail}
           <div>
-            <label for="admin-key" class="block text-sm text-[var(--text-color)] mb-1">管理员验证密钥<span class="text-red-500">*</span></label>
-            <input id="admin-key" type="password" placeholder="请输入管理员评论密钥" bind:value={adminKey}
+            <label for="admin-key" class="block text-sm text-[var(--text-color)] mb-1">{t('comments.adminKey')}<span class="text-red-500">*</span></label>
+            <input id="admin-key" type="password" placeholder={t('comments.adminKeyPlaceholder')} bind:value={adminKey}
               class="rounded w-full text-[var(--text-color)] border border-[var(--button-border-color)] focus:outline-none focus:border-[var(--link-color)] text-sm p-2" />
           </div>
         {/if}
@@ -290,7 +371,7 @@
             {#if content.trim() === ''}
               <p>{t('comments.preview') || '预览'}</p>
             {:else}
-              <div>{@html previewHtml}</div>
+              <div>{@html DOMPurify.sanitize(previewHtml)}</div>
             {/if}
           </div>
           {#if markdownWarnings.length > 0}
@@ -313,7 +394,17 @@
         </div>
       </div>
 
-      <div class="flex justify-end gap-3">
+      <div class="relative flex flex-wrap justify-end items-center gap-3">
+        {#if verifyEnabled}
+          <SilentVerify
+            bind:this={verifyComponent}
+            {apiUrl}
+            {postSlug}
+            {language}
+            honeypotField={verifyHoneypot}
+            onTicket={(ticket) => (verifyTicket = ticket)}
+          />
+        {/if}
         <button
           type="button"
           on:click={togglePreview}
@@ -322,7 +413,7 @@
         >
           {showPreview ? t('comments.write') : t('comments.preview')}
         </button>
-        <button type="submit" disabled={submitting || !isContentWithinLimit(content)}
+        <button type="submit" disabled={submitting || !isContentWithinLimit(content) || (verifyEnabled && verifyTicket === null)}
           class="rounded px-4 py-2 text-sm font-medium text-[var(--text-color)] border border-[var(--button-border-color)] hover:bg-[var(--button-hover-bg-color)] disabled:opacity-50">
           {submitting ? t('comments.sending') : t('comments.send')}
         </button>
@@ -349,8 +440,8 @@
               on:submit={async (e) => {
                 await submitComment(e.detail.parentId, e.detail);
               }}
-              on:delete={handleCommentDelete}
               replyingToId={replyingToId}
+              replySubmittingId={replySubmittingId}
               on:userInfoChange={(e) => {
                 author = e.detail.author;
                 email = e.detail.email;
@@ -362,7 +453,7 @@
 
       {#if hasMore}
         <div class="flex justify-center mt-8">
-          <button on:click={() => { page++; loadComments(true); }}
+          <button on:click={loadMoreComments}
             disabled={loadingMore}
             class="px-6 py-2.5 w-full text-sm font-medium text-[var(--text-color)] bg-transparent hover:bg-[var(--button-hover-bg-color)] active:bg-[var(--button-hover-bg-color)] transition-all duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
             {#if loadingMore}

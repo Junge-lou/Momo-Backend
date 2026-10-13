@@ -82,6 +82,28 @@ class CommentService {
   }
 
   /*
+   * 判断同一 IP 在时间窗内是否提交过完全相同的正文（审核自动化的「重复」规则）
+   *
+   * 不区分状态：被判为垃圾或被删除的评论同样计入 —— 否则刷屏者只要被删一次
+   * 就能把同一段内容无限重发。
+   */
+  async hasRecentDuplicate(ip: string, contentText: string, sinceMillis: number): Promise<boolean> {
+    const rows = (await db
+      .select({ id: schema.comments.id })
+      .from(schema.comments)
+      .where(
+        and(
+          eq(schema.comments.ip_address, ip),
+          eq(schema.comments.content_text, contentText),
+          gte(schema.comments.pub_date, sinceMillis)
+        )
+      )
+      .limit(1)
+      .all()) as unknown as { id: number }[];
+    return rows.length > 0;
+  }
+
+  /*
    * 删除评论（递归删除子评论）
    */
   async deleteComment(id: number) {
@@ -113,15 +135,33 @@ class CommentService {
 
   /*
    * 修改评论状态
+   *
+   * 级联语义（与 Go/Worker 保持一致，见 C6）：
+   *  - deleted / pending：连同全部子孙评论一起修改（删除/打回一条评论时，
+   *    其下的回复不应继续可见或保留旧状态）
+   *  - approved / rejected：只修改本条
    */
   async updateCommentStatus(id: number, status: string): Promise<Comment> {
-    await db
-      .update(schema.comments)
-      .set({ status })
-      .where(eq(schema.comments.id, id))
-      .run();
+    if (status === "deleted" || status === "pending") {
+      db.run(sql`
+        WITH RECURSIVE comment_tree AS (
+          SELECT id FROM "Comment" WHERE id = ${id}
+          UNION ALL
+          SELECT c.id FROM "Comment" c
+          INNER JOIN comment_tree ct ON c.parent_id = ct.id
+        )
+        UPDATE "Comment" SET status = ${status} WHERE id IN (SELECT id FROM comment_tree)
+      `);
+    } else {
+      await db
+        .update(schema.comments)
+        .set({ status })
+        .where(eq(schema.comments.id, id))
+        .run();
+    }
 
     const updated = await this.getCommentById(id);
+    // 调用方（handler）已做过存在性校验，此处仅作为并发删除等竞态的兜底
     if (!updated) throw new Error("Comment not found after update");
     return updated;
   }
@@ -145,6 +185,7 @@ class CommentService {
       .run();
 
     const updated = await this.getCommentById(id);
+    // 调用方（handler）已做过存在性校验，此处仅作为并发删除等竞态的兜底
     if (!updated) throw new Error("Comment not found after update");
     return updated;
   }
@@ -317,7 +358,7 @@ class CommentService {
    * 获取用户列表（按 author + email 分组）
    * 支持按昵称/邮箱搜索（不区分大小写），并标记邮箱是否在黑名单中
    */
-  async getUserList(page: number, limit: number, search?: string) {
+  async getUserList(page: number, limit: number, search?: string, verified?: string) {
     // 获取所有唯一用户
     const rawUsers = db
       .select({
@@ -336,6 +377,32 @@ class CommentService {
       }
     });
     let uniqueUsers = Array.from(uniqueMap.values());
+
+    // 邮箱验证记录（精确匹配 email，与 checkEmailVerified 的判定保持一致）
+    const verifiedRows = db
+      .select({
+        email: schema.emailVerifications.email,
+        verified_at: schema.emailVerifications.verified_at,
+      })
+      .from(schema.emailVerifications)
+      .where(eq(schema.emailVerifications.verified, 1))
+      .all() as unknown as { email: string; verified_at: string | null }[];
+
+    const verifiedAtMap = new Map<string, string>();
+    verifiedRows.forEach((r) => {
+      const current = verifiedAtMap.get(r.email);
+      const at = r.verified_at || "";
+      if (current === undefined || (at && at > current)) {
+        verifiedAtMap.set(r.email, at);
+      }
+    });
+
+    // 邮箱验证筛选：true = 已验证，false = 未验证，其余不筛选
+    if (verified === "true") {
+      uniqueUsers = uniqueUsers.filter((u) => verifiedAtMap.has(u.email));
+    } else if (verified === "false") {
+      uniqueUsers = uniqueUsers.filter((u) => !verifiedAtMap.has(u.email));
+    }
 
     // 按昵称/邮箱搜索（不区分大小写）
     const keyword = (search || "").trim().toLowerCase();
@@ -402,6 +469,8 @@ class CommentService {
           firstCommentDate,
           lastCommentDate,
           blacklisted: emailBlacklist.includes(u.email.toLowerCase()),
+          emailVerified: verifiedAtMap.has(u.email),
+          emailVerifiedAt: verifiedAtMap.get(u.email) || "",
         };
       })
     );

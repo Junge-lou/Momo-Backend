@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getCommentBySlug, postComment, verifyEmail } from "../api/index"; // public
+import { getCommentBySlug, postComment, verifyEmail, verifyChallenge, verifySolution } from "../api/index"; // public
 import {
   getAllComments,
   changeCommentStatus,
@@ -13,11 +13,14 @@ import {
   getSettings,
   updateSettings,
   changePassword,
+  logout,
   testEmail,
   importComments,
   importSettings,
   exportSettings,
   exportComments,
+  verifyOverview,
+  verifyRecords,
 } from "../api/index"; // admin
 import fs from "fs";
 import path from "path";
@@ -29,11 +32,16 @@ router.get("/api/comments", getCommentBySlug);
 router.post("/api/comments", postComment);
 router.get("/api/verify-email/verify", verifyEmail);
 
+// 无感验证（Turnstile 风格）
+router.post("/api/verify/challenge", verifyChallenge);
+router.post("/api/verify/solution", verifySolution);
+
 // Admin settings
 router.get("/admin/settings", getSettings);
 router.put("/admin/settings", updateSettings);
 router.post("/admin/settings/test-email", testEmail);
 router.put("/admin/password", changePassword);
+router.post("/admin/logout", logout);
 
 // Admin comments
 router.get("/admin/comments/list", getAllComments);
@@ -45,6 +53,10 @@ router.post("/admin/login", login);
 router.get("/admin/stats/overview", getStatsOverview);
 router.get("/admin/stats/users", getUserList);
 router.get("/admin/stats/users/comments", getUserComments);
+
+// Admin verify records（认证记录：无感验证的签发/通过/失败统计与明细）
+router.get("/admin/verify/overview", verifyOverview);
+router.get("/admin/verify/records", verifyRecords);
 
 // Admin user blacklist
 router.post("/admin/users/blacklist", addUserToBlacklist);

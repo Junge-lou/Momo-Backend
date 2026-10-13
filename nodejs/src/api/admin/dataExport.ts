@@ -14,7 +14,10 @@ function checkAuth(c: Context): boolean {
   return true;
 }
 
-// 导出系统设置（含 email_password，不含 admin_name/admin_password）
+// 导出时置空的敏感字段：避免 SMTP 密码 / 博主密钥以明文落盘
+const SENSITIVE_EXPORT_KEYS = ["email_password", "admin_comment_key"];
+
+// 导出系统设置（含 admin_name；不含 admin_password/comment_verify_secret；敏感字段置空）
 export async function exportSettings(c: Context): Promise<Response> {
   if (!checkAuth(c)) {
     return c.json({ code: 401, message: "Invalid token" }, 401);
@@ -25,6 +28,8 @@ export async function exportSettings(c: Context): Promise<Response> {
   const allowList: Record<string, boolean> = {
     site_name: true,
     admin_email: true,
+    // 与 Go/Worker 一致：导出管理员用户名，保证「导出 → 导入」往返后管理员身份不丢
+    admin_name: true,
     smtp_host: true,
     smtp_port: true,
     email_user: true,
@@ -35,6 +40,10 @@ export async function exportSettings(c: Context): Promise<Response> {
     reply_template: true,
     notification_template: true,
     comment_auto_approve: true,
+    comment_spam_keywords: true,
+    comment_spam_max_links: true,
+    comment_spam_min_length: true,
+    comment_spam_duplicate_window: true,
     ip_blacklist: true,
     email_blacklist: true,
     blogger_badge_enabled: true,
@@ -47,12 +56,25 @@ export async function exportSettings(c: Context): Promise<Response> {
     admin_comment_key_enabled: true,
     email_verify_enabled: true,
     verify_base_url: true,
+    comment_verify_enabled: true,
+    comment_verify_difficulty: true,
+    comment_verify_instr_enabled: true,
+    comment_verify_block_automated: true,
+    comment_verify_retention_days: true,
+    comment_verify_log_challenge: true,
+    trust_proxy: true,
   };
 
   const filtered: Record<string, string> = {};
+  const sensitiveOmitted: string[] = [];
   for (const key of Object.keys(allowList)) {
     if (key in all) {
-      filtered[key] = all[key];
+      if (SENSITIVE_EXPORT_KEYS.includes(key)) {
+        filtered[key] = "";
+        if (all[key]) sensitiveOmitted.push(key);
+      } else {
+        filtered[key] = all[key];
+      }
     }
   }
   if (!("email_enabled" in filtered)) {
@@ -61,11 +83,12 @@ export async function exportSettings(c: Context): Promise<Response> {
 
   return c.json({
     code: 200,
-    message: "Settings exported",
+    message: "Settings exported. Sensitive fields (email_password, admin_comment_key) are blanked; please fill them in manually after importing.",
     data: {
       exportedAt: new Date().toISOString(),
       type: "settings",
       version: pkg.version,
+      sensitiveOmitted,
       settings: filtered,
     },
   });

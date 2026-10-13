@@ -44,6 +44,14 @@ const translation: Translation = {
         list: "列表",
         showMoreReplies: "查看剩余回复",
         collapseReplies: "收起回复",
+        verifying: "验证中...",
+        verifySuccess: "验证成功",
+        verifyFailed: "验证失败",
+        verifyRetry: "点击重试",
+        verifyUnsupported: "浏览器版本过低，不支持验证",
+        verifyBackendOutdated: "验证服务版本过旧，请联系博主升级",
+        adminKey: "管理员验证密钥",
+        adminKeyPlaceholder: "请输入管理员评论密钥",
     },
 }
 

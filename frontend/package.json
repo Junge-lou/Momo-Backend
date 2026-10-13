@@ -1,25 +1,36 @@
 {
   "name": "@motues/momo-comment",
-  "version": "1.4.1",
+  "version": "1.6.0",
   "description": "Momo frontend comment component built using Svelte",
   "type": "module",
   "main": "./dist/momo-comment.min.js",
   "author": "Motues",
   "license": "MIT",
   "files": [
-    "dist"
+    "dist",
+    "vendor",
+    "scripts",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "vite build"
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@testing-library/svelte": "^5.4.2",
     "@types/dompurify": "^3.2.0",
+    "@vitest/coverage-v8": "^5.0.3",
+    "happy-dom": "^20.14.5",
     "svelte": "^5.43.8",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "^5.0.3"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",

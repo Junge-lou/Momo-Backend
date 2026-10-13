@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mileusna/useragent"
@@ -25,6 +26,16 @@ type CommentHandler struct {
 	Version string
 }
 
+// 字段长度上限（与前端组件约束对齐）
+const (
+	MaxContentLen  = 2000
+	MaxContentHTMLLen = 50000
+	MaxAuthorLen   = 100
+	MaxEmailLen    = 254
+	MaxURLLen      = 500
+	MaxPostSlugLen = 200
+)
+
 // PostComment 提交评论 (POST /api/comments)
 func (h *CommentHandler) PostComment(c *gin.Context) {
 	var req model.CommentRequest
@@ -32,6 +43,20 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
 			"message": "Invalid request body",
+		})
+		return
+	}
+
+	// 长度上限校验：避免 MB 级内容导致数据库膨胀与 Markdown 渲染 CPU 放大
+	if utf8.RuneCountInString(req.Content) > MaxContentLen ||
+		utf8.RuneCountInString(req.Author) > MaxAuthorLen ||
+		len(req.Email) > MaxEmailLen ||
+		utf8.RuneCountInString(req.PostSlug) > MaxPostSlugLen ||
+		len(req.URL) > MaxURLLen {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code": 400,
+			"message": fmt.Sprintf("Field too long (content ≤ %d, author ≤ %d, email ≤ %d, url ≤ %d, post_slug ≤ %d)",
+				MaxContentLen, MaxAuthorLen, MaxEmailLen, MaxURLLen, MaxPostSlugLen),
 		})
 		return
 	}
@@ -52,16 +77,23 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		deviceStr = "Desktop"
 	}
 
-	// 2. 检查评论频率控制 (60秒冷却)
+	// 2. 管理员身份判定（只依赖 admin_email）：
+	// 必须早于限流与黑名单检查，因为管理员邮箱不受 60 秒评论冷却限制。
+	adminEmail := utils.GetSetting("admin_email")
+	isAdminEmail := adminEmail != "" && req.Email == adminEmail
+
+	// 3. 检查评论频率控制 (60秒冷却，管理员邮箱不限流)
 	clientIP := utils.GetClientIP(c)
-	lastComment, err := h.Repo.GetLastCommentByIP(c.Request.Context(), clientIP)
-	if err == nil && lastComment != nil && lastComment.PubDate > 0 {
-		if time.Now().UnixMilli()-lastComment.PubDate < 60000 {
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"code":    429,
-				"message": "Time limit exceeded. Please wait.",
-			})
-			return
+	if !isAdminEmail {
+		lastComment, err := h.Repo.GetLastCommentByIP(c.Request.Context(), clientIP)
+		if err == nil && lastComment != nil && lastComment.PubDate > 0 {
+			if time.Now().UnixMilli()-lastComment.PubDate < 60000 {
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"code":    429,
+					"message": "Time limit exceeded. Please wait.",
+				})
+				return
+			}
 		}
 	}
 
@@ -83,18 +115,36 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		return
 	}
 
-	// 管理员评论密钥验证
-	adminEmail := utils.GetSetting("admin_email")
+	// 管理员评论密钥验证（adminEmail 已在上方读取）
 	adminCommentKey := utils.GetSetting("admin_comment_key")
 	adminCommentKeyEnabled := utils.GetSetting("admin_comment_key_enabled")
 	isAdminVerified := false
-	if req.Email == adminEmail && adminCommentKey != "" && adminCommentKeyEnabled == "true" {
+	if isAdminEmail && adminCommentKey != "" && adminCommentKeyEnabled == "true" {
 		if req.AdminKey == adminCommentKey {
 			isAdminVerified = true
 		} else {
 			c.JSON(http.StatusForbidden, gin.H{
 				"code":    403,
 				"message": "Invalid admin key",
+			})
+			return
+		}
+	}
+
+	// 无感验证票据校验（管理员密钥已通过的博主不受影响）
+	if !isAdminVerified && utils.IsVerifyEnabled() {
+		// 票据里的 slug 是**净化后**的值（见 verify.go 里签发票据时传入的 sanitizePostSlug），
+		// 所以这里必须用同一套净化规则处理后才能比对 —— 否则只要文章标识里含有
+		// CheckContent 会改写的片段（例如 <script>…</script>），签出的票据就永远兑不掉，
+		// 真人会持续收到假 VERIFY_REQUIRED。
+		//
+		// 注意只对「票据比对」用净化值：评论落库仍用原始 req.PostSlug，
+		// 因为读取端是按原始 slug 查询的，改动存储口径会让评论查不出来。
+		if !utils.VerifyTicket(req.VerifyTicket, clientIP, sanitizePostSlug(req.PostSlug)) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"code":    403,
+				"message": "Human verification failed or expired",
+				"reason":  "VERIFY_REQUIRED",
 			})
 			return
 		}
@@ -144,9 +194,10 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 
 	// 5. XSS 检查（纯文本字段使用 CheckContent，content 走 Markdown + bluemonday 完整净化）
 	sanitizedAuthor := utils.CheckContent(req.Author)
-	sanitizedURL := utils.CheckContent(req.URL)
+	// url 走协议白名单（只允许 http/https/mailto 与相对路径）
+	sanitizedURL := utils.SanitizeUrl(req.URL)
 	sanitizedPostTitle := utils.CheckContent(req.PostTitle)
-	sanitizedPostURL := utils.CheckContent(req.PostURL)
+	sanitizedPostURL := utils.SanitizeUrl(req.PostURL)
 	sanitizedContent := utils.CheckContent(req.Content)
 
 	// 6. 构造数据库模型
@@ -161,8 +212,11 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 				return nil
 			}
 		}(),
-		PubDate:     time.Now().UnixMilli(),
-		ContentText: utils.SanitizeHtml(sanitizedContent),
+		PubDate: time.Now().UnixMilli(),
+		// 纯文本列存原始文本（与 Node/Worker 一致，C2）：
+		// SanitizeHtml 只用于 ParseMarkdown 的输出，否则「我写 <script> 会怎样」
+		// 会被 bluemonday 剥成「我写 会怎样」
+		ContentText: sanitizedContent,
 		ContentHTML: utils.ParseMarkdown(sanitizedContent),
 		ParentID:    req.ParentID,
 		IPAddress:   ptrString(clientIP),
@@ -177,7 +231,17 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 			if needsVerification {
 				return "pending"
 			}
-			return utils.GetCommentStatus()
+			// 审核自动化：只有在「本来会直接通过」时才跑垃圾规则 ——
+			// comment_auto_approve = "false" 时全部评论都要人工审核，规则判定没有意义
+			base := utils.GetCommentStatus()
+			if base != "approved" {
+				return base
+			}
+			if reason := spamReason(h, c, clientIP, sanitizedContent, sanitizedAuthor, sanitizedURL); reason != "" {
+				log.Printf("[INFO] 评论被审核自动化判为垃圾，已转入待审核: %s (post_slug=%s)", reason, req.PostSlug)
+				return "pending"
+			}
+			return "approved"
 		}(),
 	}
 
@@ -244,7 +308,24 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 	})
 }
 
+// 公开评论列表限流：缓解批量遍历 post_slug 采集博主邮箱哈希等爬取行为
+// （与 Node 的 getCommentBySlug.ts、Worker 的 getComments.ts 逐项一致：
+// 同一 IP 每 60 秒最多 120 次，超出返回 429）
+const (
+	commentsGetRateLimit  = 120
+	commentsGetRateWindow = time.Minute
+)
+
 func (h *CommentHandler) GetComments(c *gin.Context) {
+	clientIP := utils.GetClientIP(c)
+	if !utils.AllowRequest("comments:get:"+clientIP, commentsGetRateLimit, commentsGetRateWindow) {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"code":    429,
+			"message": "Too many requests. Please slow down.",
+		})
+		return
+	}
+
 	slug := c.Query("post_slug")
 	if slug == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "post_slug is required"})
@@ -268,10 +349,6 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 
 	// 读取博主标识设置
 	adminEmail := utils.GetSetting("admin_email")
-	adminEmailHash := ""
-	if adminEmail != "" {
-		adminEmailHash = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(adminEmail)))))
-	}
 	badgeEnabled := utils.GetSetting("blogger_badge_enabled")
 	if badgeEnabled == "" {
 		badgeEnabled = "false"
@@ -287,6 +364,16 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 	if adminCommentKey != "" && adminCommentKeyEnabled == "true" {
 		adminCommentKeyConfigured = "true"
 	}
+
+	// 邮箱哈希仅供前端判断「是否需要显示管理员密钥输入框」。
+	// 只有在博主密钥功能开启时才下发，避免被用于离线枚举管理员邮箱。
+	adminEmailHash := ""
+	if adminEmail != "" && adminCommentKeyEnabled == "true" {
+		adminEmailHash = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(adminEmail)))))
+	}
+
+	// 无感验证公开配置（开关 + 按文章派生的蜜罐字段名 + 协议版本）
+	verifyEnabled, verifyHoneypot, verifyVersion := utils.GetPublicVerifyConfig(slug)
 
 	// 1. 从 Repo 获取所有已审核评论 (status = 'approved')
 	allComments, err := h.Repo.GetByPostSlug(c.Request.Context(), slug)
@@ -351,11 +438,40 @@ func (h *CommentHandler) GetComments(c *gin.Context) {
 			"placeholder_url":              placeholderURL,
 			"admin_comment_key_configured": adminCommentKeyConfigured,
 			"admin_email_hash":             adminEmailHash,
+			"verify_enabled":               verifyEnabled,
+			"verify_honeypot":              verifyHoneypot,
+			"verify_version":               verifyVersion,
 		},
 	})
 }
 
 func ptrString(s string) *string { return &s }
+
+// spamReason 判定已净化后的评论是否命中垃圾规则（含「同 IP 重复内容」）。
+//
+// 返回命中原因，未命中返回空串。规则配置损坏或重复检测查询失败时保持放行并写日志：
+// 一条坏配置不能让全站评论都卡在待审核。
+func spamReason(h *CommentHandler, c *gin.Context, ip, content, author, url string) string {
+	keywords, maxLinks, minLength, window := utils.GetCommentSpamSettings()
+
+	if reason := utils.EvaluateSpamRules(content, author, url, keywords, maxLinks, minLength); reason != "" {
+		return reason
+	}
+
+	if window > 0 {
+		since := time.Now().UnixMilli() - int64(window)*60*1000
+		duplicated, err := h.Repo.HasRecentDuplicate(c.Request.Context(), ip, content, since)
+		if err != nil {
+			log.Printf("[WARN] 重复评论检测失败，已跳过该规则: %v", err)
+			return ""
+		}
+		if duplicated {
+			return "duplicate:" + strconv.Itoa(window) + "m"
+		}
+	}
+
+	return ""
+}
 
 func buildCommentTree(comments []*model.CommentResponse) []*model.CommentResponse {
 	nodes := make(map[int64]*model.CommentResponse)
@@ -378,11 +494,17 @@ func buildCommentTree(comments []*model.CommentResponse) []*model.CommentRespons
 }
 
 func slicePagination(total, page, limit int) (int, int) {
+	// 越界页必须先夹取再切片：
+	// page 来自查询参数且只做了下界校正（page < 1 → 1），未做上界限制。
+	// 当 page 极大时 (page-1)*limit 会整数溢出为负数，
+	// 既绕过下面的 start > total 分支，又让调用方以负下标切片而 panic（500）。
+	// 这里把 start 夹到 [0, total]，任何越界页都退化为空区间。
 	start := (page - 1) * limit
-	if start > total {
+	end := start + limit
+	// 上界溢出（start 为负）或下界溢出（limit 为负导致 end < start）都退化为空区间
+	if start < 0 || end < start || start > total {
 		return total, total
 	}
-	end := start + limit
 	if end > total {
 		end = total
 	}

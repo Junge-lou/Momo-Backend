@@ -42,6 +42,10 @@ func RegisterRoutes(r *gin.Engine, h *CommentHandler) {
 		api.POST("/comments", h.PostComment)
 		api.GET("/comments", h.GetComments)
 		api.GET("/verify-email/verify", h.VerifyEmail)
+
+		// 无感验证（Turnstile 风格）
+		api.POST("/verify/challenge", h.VerifyChallenge)
+		api.POST("/verify/solution", h.VerifySolution)
 	}
 
 	// 2. 管理员接口
@@ -56,10 +60,14 @@ func RegisterRoutes(r *gin.Engine, h *CommentHandler) {
 			auth.PUT("/settings", h.UpdateSettings)
 			auth.POST("/settings/test-email", h.TestEmail)
 			auth.PUT("/password", h.ChangePassword)
+			auth.POST("/logout", h.Logout)
 			auth.GET("/comments/list", h.ListAllComments)
 			auth.PUT("/comments/status", h.UpdateCommentStatus)
 			auth.PUT("/comments/edit", h.UpdateComment)
 			auth.GET("/stats/overview", h.GetStatsOverview)
+			// 认证记录（无感验证的签发/通过/失败统计与明细）
+			auth.GET("/verify/overview", h.GetVerifyOverview)
+			auth.GET("/verify/records", h.GetVerifyRecords)
 			auth.GET("/stats/users", h.GetUserList)
 			auth.GET("/stats/users/comments", h.GetUserComments)
 			auth.POST("/users/blacklist", h.AddUserToBlacklist)

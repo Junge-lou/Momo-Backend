@@ -44,7 +44,8 @@ func InitSchema(db *sqlx.DB) error {
 		content_text TEXT NOT NULL,
 		content_html TEXT NOT NULL,
 		parent_id INTEGER,
-		status TEXT DEFAULT 'approved',
+		-- 默认值与 Node/Worker 一致（C11）：绕过应用层的写入落在最安全的 pending
+		status TEXT DEFAULT 'pending',
 		FOREIGN KEY (parent_id) REFERENCES Comment (id) ON DELETE SET NULL
 	);
 	CREATE INDEX IF NOT EXISTS idx_post_slug ON Comment(post_slug);
@@ -80,8 +81,37 @@ func InitSchema(db *sqlx.DB) error {
 		return err
 	}
 
+	// VerifyRecord table：评论无感验证（人机验证）的认证记录，见 doc/data_table.md
+	// 纯新增表：靠 IF NOT EXISTS 在每次启动时补齐，已有数据库无需手工迁移
+	verifyRecordSchema := `
+	CREATE TABLE IF NOT EXISTS VerifyRecord (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at INTEGER NOT NULL,
+		event TEXT NOT NULL,
+		reason TEXT,
+		elapsed_ms INTEGER,
+		difficulty INTEGER,
+		challenge_id TEXT,
+		post_slug TEXT,
+		ip_address TEXT,
+		country TEXT,
+		network TEXT,
+		asn INTEGER
+	);
+	CREATE INDEX IF NOT EXISTS idx_vr_created ON VerifyRecord(created_at);
+	CREATE INDEX IF NOT EXISTS idx_vr_event ON VerifyRecord(event);
+	CREATE INDEX IF NOT EXISTS idx_vr_cid ON VerifyRecord(challenge_id);`
+	if _, err := db.Exec(verifyRecordSchema); err != nil {
+		return err
+	}
+
 	_, err := db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 幂等启动自迁移（数据归一化等，见 migrate.go）
+	return RunMigrations(db)
 }
 
 func (r *commentRepo) Create(ctx context.Context, c *model.Comment) error {
@@ -200,15 +230,19 @@ func (r *commentRepo) ListAll(ctx context.Context) ([]*model.Comment, error) {
 func (r *commentRepo) GetStatsOverview(ctx context.Context, rangeParam string) (*model.StatsOverview, error) {
 	stats := &model.StatsOverview{}
 
+	// range=all / range=0：最近 12 个月按月聚合；其余：最近 N 天（默认 7，上限 365）。
+	// 三端统一（C9）：此前 all 会退化成「近 365 天」
 	var daysBack int
 	var isAll bool
-	switch rangeParam {
+	switch strings.ToLower(strings.TrimSpace(rangeParam)) {
 	case "all", "0":
 		isAll = true
-		daysBack = 365
 	default:
-		if r, err := strconv.Atoi(rangeParam); err == nil && r > 0 {
-			daysBack = r - 1
+		if n, err := strconv.Atoi(strings.TrimSpace(rangeParam)); err == nil && n > 0 {
+			if n > 365 {
+				n = 365
+			}
+			daysBack = n - 1
 		} else {
 			daysBack = 6
 		}
@@ -241,37 +275,41 @@ func (r *commentRepo) GetStatsOverview(ctx context.Context, rangeParam string) (
 	}
 
 	if isAll {
-			// 最近 12 个月：按月聚合
-			monthlyMap := make(map[string]int64)
-			now := time.Now()
-			for i := 11; i >= 0; i-- {
-				d := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -i, 0)
-				key := d.Format("2006-01")
-				monthlyMap[key] = 0
+		// 最近 12 个月：按月聚合。
+		// 分桶统一使用 UTC（strftime(...,'unixepoch') 就是 UTC），键也必须用 UTC 生成，
+		// 否则非 UTC 时区下跨月边界会错位（C3）
+		monthlyMap := make(map[string]int64)
+		now := time.Now().UTC()
+		for i := 11; i >= 0; i-- {
+			d := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -i, 0)
+			key := d.Format("2006-01")
+			monthlyMap[key] = 0
+		}
+		twelveMonthsAgo := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -11, 0)
+		var monthlyRows []struct {
+			MonthStr string `db:"month_str"`
+			Count    int64  `db:"count"`
+		}
+		_ = r.db.SelectContext(ctx, &monthlyRows, `
+			SELECT strftime('%Y-%m', pub_date / 1000, 'unixepoch') as month_str, COUNT(*) as count
+			FROM Comment
+			WHERE pub_date >= ?
+			GROUP BY month_str ORDER BY month_str ASC
+		`, twelveMonthsAgo.UnixMilli())
+		for _, row := range monthlyRows {
+			if _, ok := monthlyMap[row.MonthStr]; ok {
+				monthlyMap[row.MonthStr] = row.Count
 			}
-			twelveMonthsAgo := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -11, 0)
-			var monthlyRows []struct {
-				MonthStr string `db:"month_str"`
-				Count    int64  `db:"count"`
-			}
-			_ = r.db.SelectContext(ctx, &monthlyRows, `
-				SELECT strftime('%Y-%m', pub_date / 1000, 'unixepoch') as month_str, COUNT(*) as count
-				FROM Comment
-				WHERE pub_date >= ?
-				GROUP BY month_str ORDER BY month_str ASC
-			`, twelveMonthsAgo.UnixMilli())
-			for _, row := range monthlyRows {
-				if _, ok := monthlyMap[row.MonthStr]; ok {
-					monthlyMap[row.MonthStr] = row.Count
-				}
-			}
-			for _, d := range getMonthRange(11) {
-				stats.RecentComments = append(stats.RecentComments, model.DateCount{Date: d, Count: monthlyMap[d]})
-			}
+		}
+		for _, d := range getMonthRange(11) {
+			stats.RecentComments = append(stats.RecentComments, model.DateCount{Date: d, Count: monthlyMap[d]})
+		}
 	} else {
+		// 日分桶同样统一 UTC：键与 SQL 的 strftime(...,'unixepoch') 必须落在同一时区
 		dateCountMap := make(map[string]int64)
+		nowUTC := time.Now().UTC()
 		for i := daysBack; i >= 0; i-- {
-			d := time.Now().AddDate(0, 0, -i)
+			d := nowUTC.AddDate(0, 0, -i)
 			key := d.Format("2006-01-02")
 			dateCountMap[key] = 0
 		}
@@ -279,7 +317,7 @@ func (r *commentRepo) GetStatsOverview(ctx context.Context, rangeParam string) (
 			DateStr string `db:"date_str"`
 			Count   int64  `db:"count"`
 		}
-		startDateStr := time.Now().AddDate(0, 0, -daysBack).Format("2006-01-02")
+		startDateStr := nowUTC.AddDate(0, 0, -daysBack).Format("2006-01-02")
 		_ = r.db.SelectContext(ctx, &recentRows, `
 			SELECT strftime('%Y-%m-%d', pub_date / 1000, 'unixepoch') as date_str, COUNT(*) as count
 			FROM Comment
@@ -325,16 +363,31 @@ func (r *commentRepo) GetStatsOverview(ctx context.Context, rangeParam string) (
 	return stats, nil
 }
 
-func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int, search string) ([]*model.UserStats, int64, error) {
+func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int, search string, verified string) ([]*model.UserStats, int64, error) {
 	search = strings.TrimSpace(search)
 
+	// 与评论提交时的判定保持一致：EmailVerification.email 精确匹配且 verified = 1
+	const verifiedExists = "EXISTS (SELECT 1 FROM EmailVerification ev WHERE ev.email = Comment.email AND ev.verified = 1)"
+
 	// 按昵称/邮箱搜索（SQLite LIKE 对 ASCII 不区分大小写）
-	where := ""
+	conditions := make([]string, 0, 2)
 	args := make([]interface{}, 0)
 	if search != "" {
 		like := "%" + search + "%"
-		where = " WHERE author LIKE ? OR email LIKE ?"
+		conditions = append(conditions, "(author LIKE ? OR email LIKE ?)")
 		args = append(args, like, like)
+	}
+	// 邮箱验证筛选：verified = "true" / "false"，其余取值（含 "all"）不筛选
+	switch verified {
+	case "true":
+		conditions = append(conditions, verifiedExists)
+	case "false":
+		conditions = append(conditions, "NOT "+verifiedExists)
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 
 	var total int64
@@ -342,14 +395,16 @@ func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int, search
 	_ = r.db.GetContext(ctx, &total, countQuery, args...)
 
 	type userRow struct {
-		Author        string `db:"author"`
-		Email         string `db:"email"`
-		CommentCount  int64  `db:"commentCount"`
-		ApprovedCount int64  `db:"approvedCount"`
-		PendingCount  int64  `db:"pendingCount"`
-		DeletedCount  int64  `db:"deletedCount"`
-		MinDate       int64  `db:"min_date"`
-		MaxDate       int64  `db:"max_date"`
+		Author          string `db:"author"`
+		Email           string `db:"email"`
+		CommentCount    int64  `db:"commentCount"`
+		ApprovedCount   int64  `db:"approvedCount"`
+		PendingCount    int64  `db:"pendingCount"`
+		DeletedCount    int64  `db:"deletedCount"`
+		MinDate         int64  `db:"min_date"`
+		MaxDate         int64  `db:"max_date"`
+		EmailVerified   int64  `db:"emailVerified"`
+		EmailVerifiedAt string `db:"emailVerifiedAt"`
 	}
 	var rows []userRow
 	query := `
@@ -360,7 +415,9 @@ func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int, search
 			COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) as pendingCount,
 			COALESCE(SUM(CASE WHEN status = 'deleted' THEN 1 ELSE 0 END), 0) as deletedCount,
 			MIN(pub_date) as min_date,
-			MAX(pub_date) as max_date
+			MAX(pub_date) as max_date,
+			CASE WHEN ` + verifiedExists + ` THEN 1 ELSE 0 END as emailVerified,
+			COALESCE((SELECT MAX(ev.verified_at) FROM EmailVerification ev WHERE ev.email = Comment.email AND ev.verified = 1), '') as emailVerifiedAt
 		FROM Comment` + where + `
 		GROUP BY author, email
 		ORDER BY commentCount DESC
@@ -383,6 +440,8 @@ func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int, search
 			DeletedCount:     row.DeletedCount,
 			FirstCommentDate: time.UnixMilli(row.MinDate).UTC().Format("2006-01-02T15:04:05.000Z"),
 			LastCommentDate:  time.UnixMilli(row.MaxDate).UTC().Format("2006-01-02T15:04:05.000Z"),
+			EmailVerified:    row.EmailVerified == 1,
+			EmailVerifiedAt:  row.EmailVerifiedAt,
 		})
 	}
 
@@ -391,8 +450,10 @@ func (r *commentRepo) GetUserList(ctx context.Context, offset, limit int, search
 
 func getDateRange(daysBack int) []string {
 	var dates []string
+	// 与 SQL 的 strftime(...,'unixepoch') 对齐：必须使用 UTC 日期
+	nowUTC := time.Now().UTC()
 	for i := daysBack; i >= 0; i-- {
-		d := time.Now().AddDate(0, 0, -i)
+		d := nowUTC.AddDate(0, 0, -i)
 		dates = append(dates, d.Format("2006-01-02"))
 	}
 	return dates
@@ -400,7 +461,7 @@ func getDateRange(daysBack int) []string {
 
 func getMonthRange(monthsBack int) []string {
 	var months []string
-	now := time.Now()
+	now := time.Now().UTC()
 	for i := monthsBack; i >= 0; i-- {
 		d := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -i, 0)
 		months = append(months, d.Format("2006-01"))
@@ -450,6 +511,21 @@ func (r *commentRepo) GetLastCommentByIP(ctx context.Context, ip string) (*model
 		return nil, err
 	}
 	return &c, nil
+}
+
+// HasRecentDuplicate 判断同一 IP 在时间窗内是否提交过完全相同的正文（审核自动化的「重复」规则）。
+//
+// 不区分状态：被判为垃圾或被删除的评论同样计入 —— 否则刷屏者只要被删一次
+// 就能把同一段内容无限重发。
+func (r *commentRepo) HasRecentDuplicate(ctx context.Context, ip, contentText string, sinceMillis int64) (bool, error) {
+	var count int64
+	err := r.db.GetContext(ctx, &count,
+		"SELECT COUNT(*) FROM Comment WHERE ip_address = ? AND content_text = ? AND pub_date >= ?",
+		ip, contentText, sinceMillis)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // CheckEmailVerified 检查邮箱是否已验证

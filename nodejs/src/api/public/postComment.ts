@@ -4,27 +4,67 @@ import { UAParser } from "ua-parser-js";
 import CommentService from "../../orm/commentService";
 import { CreateCommentInput } from "../../type/prisma";
 import { sendCommentReplyNotification, sendCommentNotification, isEmailServiceAvailable, checkEmailVerified, saveVerificationToken, hasUnverifiedToken, sendVerificationEmail } from "../../utils/email";
-import { canPostComment, checkContent, sanitizeHtml, checkIpBlacklist, checkEmailBlacklist, getCommentStatus } from "../../utils/security";
+import { canPostComment, checkContent, countCodePoints, MAX_POST_SLUG, sanitizePostSlug, sanitizeHtml, sanitizeUrl, checkIpBlacklist, checkEmailBlacklist, getCommentStatus } from "../../utils/security";
+import { checkCommentSpam } from "../../utils/spam";
 import { getSetting } from "../../utils/settings";
+import { isVerifyEnabled, verifyTicket } from "../../utils/verify";
 import { parseMarkdown } from "../../utils/markdown";
 import { getClientIP } from "../../utils/ip";
 import LogService from "../../utils/log";
+
+// 字段长度上限（与前端组件约束对齐）
+const MAX_CONTENT = 2000;
+const MAX_AUTHOR = 100;
+const MAX_EMAIL = 254;
+const MAX_URL = 500;
+
 
 export default async (c: Context): Promise<Response> => {
   try {
     const data = await c.req.json();
     const ip = getClientIP(c);
 
-    // 必填字段校验
-    if (!data.post_slug || !data.author || !data.email || !data.content) {
+    // 必填字段校验（同时校验类型，避免非字符串导致后续处理抛错）
+    if (
+      typeof data?.post_slug !== "string" ||
+      typeof data?.author !== "string" ||
+      typeof data?.email !== "string" ||
+      typeof data?.content !== "string" ||
+      !data.post_slug.trim() ||
+      !data.author.trim() ||
+      !data.email.trim() ||
+      !data.content.trim()
+    ) {
       return c.json(
         { code: 400, message: "post_slug, author, email, and content are required" },
         400
       );
     }
 
-    // 检查评论时间
-    if (!(await canPostComment(ip))) {
+    // 长度上限校验：避免 MB 级内容导致数据库膨胀与 Markdown 渲染 CPU 放大
+    const overLimit =
+      countCodePoints(data.post_slug) > MAX_POST_SLUG ||
+      data.author.length > MAX_AUTHOR ||
+      data.email.length > MAX_EMAIL ||
+      data.content.length > MAX_CONTENT ||
+      (typeof data.url === "string" && data.url.length > MAX_URL);
+    if (overLimit) {
+      return c.json(
+        {
+          code: 400,
+          message: `Field too long (content ≤ ${MAX_CONTENT}, author ≤ ${MAX_AUTHOR}, email ≤ ${MAX_EMAIL}, url ≤ ${MAX_URL}, post_slug ≤ ${MAX_POST_SLUG})`,
+        },
+        400
+      );
+    }
+
+    // 管理员身份判定（只依赖 admin_email）：
+    // 必须早于限流与黑名单检查，因为管理员邮箱不受 60 秒评论冷却限制。
+    const adminEmail = (await getSetting("admin_email")) || "";
+    const isAdminEmail = !!adminEmail && data.email === adminEmail;
+
+    // 检查评论时间（管理员邮箱不限流）
+    if (!isAdminEmail && !(await canPostComment(ip))) {
       return c.json({ code: 429, message: "Time limit exceeded" }, 429);
     }
 
@@ -38,13 +78,12 @@ export default async (c: Context): Promise<Response> => {
       return c.json({ code: 403, message: "Your email has been blocked" }, 403);
     }
 
-    // 管理员评论密钥验证
-    const adminEmail = (await getSetting("admin_email")) || "";
+    // 管理员评论密钥验证（adminEmail 已在上方读取）
     const adminCommentKey = (await getSetting("admin_comment_key")) || "";
     const adminCommentKeyEnabled =
       (await getSetting("admin_comment_key_enabled")) || "false";
     let isAdminVerified = false;
-    if (data.email === adminEmail && adminCommentKey && adminCommentKeyEnabled === "true") {
+    if (isAdminEmail && adminCommentKey && adminCommentKeyEnabled === "true") {
       if (data.admin_key === adminCommentKey) {
         isAdminVerified = true;
       } else {
@@ -52,14 +91,60 @@ export default async (c: Context): Promise<Response> => {
       }
     }
 
+    // 无感验证票据校验（管理员密钥已通过的博主不受影响）
+    if (!isAdminVerified && (await isVerifyEnabled())) {
+      // 票据里的 slug 是**净化后**的值（见 verifySolution.ts 的 createTicket 调用），
+      // 所以这里必须用同一套净化规则处理后才能比对 —— 否则只要文章标识里含有
+      // checkContent 会改写的片段（例如 <script>…</script>），签出的票据就永远兑不掉，
+      // 真人会持续收到假 VERIFY_REQUIRED。
+      //
+      // 注意只对「票据比对」用净化值：评论落库仍用原始 post_slug，
+      // 因为读取端是按原始 post_slug 查询的，改动存储口径会让评论查不出来。
+      const ticketSlug = sanitizePostSlug(data.post_slug);
+      const ticketOk = await verifyTicket(data.verify_ticket, ip, ticketSlug);
+      if (!ticketOk) {
+        return c.json(
+          {
+            code: 403,
+            message: "Human verification failed or expired",
+            reason: "VERIFY_REQUIRED",
+          },
+          403
+        );
+      }
+    }
+
     // 对所有用户输入进行 XSS 检查
     const content = checkContent(data.content);
     const author = checkContent(data.author);
-    const url = checkContent(data.url || "");
-    const postTitle = checkContent(data.post_title || "");
-    const postUrl = checkContent(data.post_url || "");
+    // url 走协议白名单（只允许 http/https/mailto 与相对路径）
+    const url = sanitizeUrl(data.url);
+    const postTitle = checkContent(typeof data.post_title === "string" ? data.post_title : "");
+    const postUrl = sanitizeUrl(data.post_url);
     const uaParser = new UAParser(c.req.header("user-agent") ?? "");
     const uaResult = uaParser.getResult();
+
+    // 审核自动化：只有在「本来会直接通过」时才跑垃圾规则 ——
+    // comment_auto_approve = "false" 时全部评论都要人工审核，规则判定没有意义；
+    // 博主（管理员密钥已验证）的评论直接通过，不受规则影响。
+    let status = isAdminVerified ? "approved" : await getCommentStatus();
+    if (!isAdminVerified && status === "approved") {
+      const spamReason = await checkCommentSpam({
+        content,
+        author,
+        url,
+        ip,
+      });
+      if (spamReason) {
+        status = "pending";
+        LogService.info("评论被审核自动化判为垃圾，已转入待审核", {
+          reason: spamReason,
+          post_slug: data.post_slug,
+          email: data.email,
+        });
+      }
+    }
+
     const commentData: CreateCommentInput = {
       pub_date: Date.now(),
       post_slug: data.post_slug,
@@ -74,7 +159,7 @@ export default async (c: Context): Promise<Response> => {
       content_text: content,
       content_html: sanitizeHtml(await parseMarkdown(content)),
       parent_id: data.parent_id ?? null,
-      status: isAdminVerified ? "approved" : await getCommentStatus(),
+      status,
     };
 
     // 邮箱验证检查

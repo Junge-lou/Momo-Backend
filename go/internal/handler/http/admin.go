@@ -1,7 +1,9 @@
 package http
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"momo-backend-go/internal/model"
 	"momo-backend-go/internal/pkg/utils"
@@ -9,9 +11,24 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 )
+
+// commentExists 判断评论是否存在。
+// 参数错误（如 id 非法）由调用方提前拦截，此处只用于存在性校验。
+func (h *CommentHandler) commentExists(c *gin.Context, id int64) (bool, error) {
+	_, err := h.Repo.GetByID(c.Request.Context(), id)
+	if err == nil {
+		return true, nil
+	}
+	// 记录不存在：sql.ErrNoRows（modernc/sqlite 亦为此 sentinel）
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return false, err
+}
 
 // Login 优化后的登录逻辑
 func (h *CommentHandler) Login(c *gin.Context) {
@@ -75,39 +92,13 @@ func (h *CommentHandler) GetSettings(c *gin.Context) {
 		"admin_comment_key": true,
 	}
 
-	allowedSettings := map[string]bool{
-		"site_name":                 true,
-		"admin_email":               true,
-		"admin_name":                true,
-		"smtp_host":                 true,
-		"smtp_port":                 true,
-		"email_user":                true,
-		"email_password":            true,
-		"email_secure":              true,
-		"allow_origin":              true,
-		"email_enabled":             true,
-		"reply_template":            true,
-		"notification_template":     true,
-		"comment_auto_approve":      true,
-		"ip_blacklist":              true,
-		"email_blacklist":           true,
-		"blogger_badge_enabled":     true,
-		"blogger_badge_text":        true,
-		"placeholder_name":          true,
-		"placeholder_email":         true,
-		"placeholder_content":       true,
-		"placeholder_url":           true,
-		"admin_comment_key":         true,
-		"admin_comment_key_enabled": true,
-		"email_verify_enabled":      true,
-		"verify_base_url":          true,
-	}
+	// 白名单的唯一数据源在 utils/settings.go（IsAllowedSetting / AllowedSettingKeys）
 
 	// 按模块分组
 	settingsGroups := map[string][]string{
-		"basic":    {"site_name", "admin_email", "comment_auto_approve", "blogger_badge_enabled", "blogger_badge_text", "placeholder_name", "placeholder_email", "placeholder_content", "placeholder_url"},
+		"basic":    {"site_name", "admin_email", "comment_auto_approve", "comment_spam_keywords", "comment_spam_max_links", "comment_spam_min_length", "comment_spam_duplicate_window", "blogger_badge_enabled", "blogger_badge_text", "placeholder_name", "placeholder_email", "placeholder_content", "placeholder_url"},
 		"email":    {"smtp_host", "smtp_port", "email_user", "email_password", "email_secure", "email_enabled", "email_verify_enabled", "verify_base_url", "reply_template", "notification_template"},
-		"security": {"allow_origin", "admin_comment_key", "admin_comment_key_enabled", "ip_blacklist", "email_blacklist"},
+		"security": {"allow_origin", "admin_comment_key", "admin_comment_key_enabled", "ip_blacklist", "email_blacklist", "comment_verify_enabled", "comment_verify_difficulty", "comment_verify_instr_enabled", "comment_verify_block_automated", "comment_verify_retention_days", "comment_verify_log_challenge", "trust_proxy"},
 		"account":  {"admin_name"},
 	}
 
@@ -122,10 +113,7 @@ func (h *CommentHandler) GetSettings(c *gin.Context) {
 		}
 	}
 	if keys == nil {
-		keys = make([]string, 0, len(allowedSettings))
-		for k := range allowedSettings {
-			keys = append(keys, k)
-		}
+		keys = utils.AllowedSettingKeys()
 	}
 
 	filtered := make(map[string]string)
@@ -140,6 +128,15 @@ func (h *CommentHandler) GetSettings(c *gin.Context) {
 	}
 	if _, ok := filtered["email_enabled"]; !ok {
 		filtered["email_enabled"] = "true"
+	}
+	// 告知前端该开关是否被环境变量/配置文件强制指定（页面设置将不生效）
+	for _, key := range keys {
+		if key == "trust_proxy" {
+			if source := utils.TrustProxyOverrideSource(); source != "" {
+				filtered["trust_proxy_override"] = source
+			}
+			break
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -159,42 +156,30 @@ func (h *CommentHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 
-	allowedSettings := map[string]bool{
-		"site_name":                 true,
-		"admin_email":               true,
-		"admin_name":                true,
-		"smtp_host":                 true,
-		"smtp_port":                 true,
-		"email_user":                true,
-		"email_password":            true,
-		"email_secure":              true,
-		"allow_origin":              true,
-		"email_enabled":             true,
-		"reply_template":            true,
-		"notification_template":     true,
-		"comment_auto_approve":      true,
-		"ip_blacklist":              true,
-		"email_blacklist":           true,
-		"blogger_badge_enabled":     true,
-		"blogger_badge_text":        true,
-		"placeholder_name":          true,
-		"placeholder_email":         true,
-		"placeholder_content":       true,
-		"placeholder_url":           true,
-		"admin_comment_key":         true,
-		"admin_comment_key_enabled": true,
-		"email_verify_enabled":      true,
-		"verify_base_url":          true,
-	}
-
 	for key := range body {
-		if !allowedSettings[key] {
+		if !utils.IsAllowedSetting(key) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"code":    400,
 				"message": "Setting \"" + key + "\" is not allowed",
 			})
 			return
 		}
+	}
+
+	// 黑名单格式校验：非法条目会让规则失效甚至误伤全部 IP，必须在入口拦下
+	if raw, ok := body["ip_blacklist"]; ok && !utils.ValidateIPBlacklistJSON(raw) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "ip_blacklist must be a JSON array of valid IP or CIDR strings",
+		})
+		return
+	}
+
+	// 审核自动化规则同样必须在入口校验：一个非数字阈值或坏掉的关键词数组
+	// 会让规则静默失效，甚至把全站评论都判为垃圾
+	if msg := validateSpamSettingsInBody(body); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": msg})
+		return
 	}
 
 	smtpChanged := body["smtp_host"] != "" || body["smtp_port"] != "" || body["email_user"] != "" || body["email_password"] != ""
@@ -209,7 +194,12 @@ func (h *CommentHandler) UpdateSettings(c *gin.Context) {
 		}
 	}
 
-	log.Printf("[INFO] Settings updated by admin: %v", body)
+	// 只记录键名：settings 中含 SMTP 密码等敏感值，不能整体落盘
+	updatedKeys := make([]string, 0, len(body))
+	for key := range body {
+		updatedKeys = append(updatedKeys, key)
+	}
+	log.Printf("[INFO] Settings updated by admin: %v", updatedKeys)
 	c.JSON(http.StatusOK, gin.H{
 		"code":        200,
 		"message":     "Settings updated",
@@ -253,8 +243,9 @@ func (h *CommentHandler) TestEmail(c *gin.Context) {
 
 	if err := svc.SendRaw(adminEmail, "SMTP 配置验证", htmlContent); err != nil {
 		log.Printf("[ERROR] Test email failed: %v", err)
+		// HTTP 状态码与响应体 code 必须一致（C8）
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    400,
+			"code":    500,
 			"message": "邮件发送失败，请检查 SMTP 配置",
 		})
 		return
@@ -299,8 +290,9 @@ func (h *CommentHandler) ChangePassword(c *gin.Context) {
 	}
 
 	if !utils.CheckAdminCredentials(req.OldName, req.OldPassword) {
+		// HTTP 状态码与响应体 code 必须一致（C8）
 		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    400,
+			"code":    401,
 			"message": "Current credentials are incorrect",
 		})
 		return
@@ -315,10 +307,25 @@ func (h *CommentHandler) ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// 吊销全部已签发的会话：改密后旧 token 立即失效
+	utils.ClearAllTokens()
+
 	log.Printf("[INFO] Admin credentials changed: %s -> %s", req.OldName, req.NewName)
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
 		"message": "Admin credentials updated successfully. Please login again.",
+	})
+}
+
+// Logout 登出：吊销当前 token
+func (h *CommentHandler) Logout(c *gin.Context) {
+	token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+	if token != "" {
+		utils.RevokeToken(token)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "Logged out",
 	})
 }
 
@@ -399,10 +406,32 @@ func (h *CommentHandler) UpdateCommentStatus(c *gin.Context) {
 		return
 	}
 
-	if err := h.Repo.UpdateStatus(c.Request.Context(), id, status); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+	// 状态枚举白名单：拒绝任意字符串写入状态机
+	if !utils.IsValidCommentStatus(status) {
+		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    400,
-			"message": "Invalid request parameters",
+			"message": "Invalid status. Allowed: pending, approved, rejected, deleted",
+		})
+		return
+	}
+
+	// 存在性校验：与 Node/Worker 统一返回 404，
+	// 否则影响 0 行的 UPDATE 会被当成更新成功
+	exists, err := h.commentExists(c, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "Failed to update comment status"})
+		return
+	}
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Comment not found"})
+		return
+	}
+
+	if err := h.Repo.UpdateStatus(c.Request.Context(), id, status); err != nil {
+		// HTTP 状态码与响应体 code 必须一致（C8）
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    500,
+			"message": "Failed to update comment status",
 		})
 		return
 	}
@@ -430,26 +459,62 @@ func (h *CommentHandler) UpdateComment(c *gin.Context) {
 
 	fields := make(map[string]interface{})
 	if req.Author != nil {
-		fields["author"] = *req.Author
+		fields["author"] = utils.CheckContent(*req.Author)
 	}
 	if req.Email != nil {
-		fields["email"] = *req.Email
+		fields["email"] = strings.TrimSpace(*req.Email)
 	}
 	if req.ContentText != nil {
-		fields["content_text"] = *req.ContentText
+		// 后台写路径必须与前台一致地净化，否则可直接写入 javascript: 链接
+		text := utils.CheckContent(*req.ContentText)
+		fields["content_text"] = text
 		// 只改了 content_text 但没传 content_html 时，自动渲染 markdown
 		if req.ContentHtml == nil {
-			fields["content_html"] = utils.ParseMarkdown(*req.ContentText)
+			fields["content_html"] = utils.SanitizeHtml(utils.ParseMarkdown(text))
 		}
 	}
 	if req.ContentHtml != nil {
-		fields["content_html"] = *req.ContentHtml
+		fields["content_html"] = utils.SanitizeHtml(*req.ContentHtml)
 	}
 	if req.URL != nil {
-		fields["url"] = *req.URL
+		// url 走协议白名单（只允许 http/https/mailto 与相对路径）
+		fields["url"] = utils.SanitizeUrl(*req.URL)
 	}
 	if len(fields) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "No fields to update"})
+		return
+	}
+
+	// 字段长度上限校验
+	if v, ok := fields["author"].(string); ok && utf8.RuneCountInString(v) > MaxAuthorLen {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "Field length limit exceeded"})
+		return
+	}
+	if v, ok := fields["email"].(string); ok && len(v) > MaxEmailLen {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "Field length limit exceeded"})
+		return
+	}
+	if v, ok := fields["content_text"].(string); ok && utf8.RuneCountInString(v) > MaxContentLen {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "Field length limit exceeded"})
+		return
+	}
+	if v, ok := fields["content_html"].(string); ok && len(v) > MaxContentHTMLLen {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "Field length limit exceeded"})
+		return
+	}
+	if v, ok := fields["url"].(string); ok && len(v) > MaxURLLen {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "Field length limit exceeded"})
+		return
+	}
+
+	// 存在性校验：与 Node/Worker 统一返回 404
+	exists, err := h.commentExists(c, req.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "Update failed"})
+		return
+	}
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"code": 404, "message": "Comment not found"})
 		return
 	}
 
@@ -494,14 +559,23 @@ func (h *CommentHandler) GetUserList(c *gin.Context) {
 
 	limitStr := c.DefaultQuery("limit", "20")
 	limit, err := strconv.Atoi(limitStr)
+	// 分页参数 clamp（C14）：1 <= limit <= 100
 	if err != nil || limit < 1 {
 		limit = 20
+	} else if limit > 100 {
+		limit = 100
 	}
 
 	search := strings.TrimSpace(c.DefaultQuery("search", ""))
 
+	// 邮箱验证筛选：all（默认）/ true（已验证）/ false（未验证）
+	verified := strings.ToLower(strings.TrimSpace(c.DefaultQuery("verified", "all")))
+	if verified != "true" && verified != "false" {
+		verified = "all"
+	}
+
 	offset := (page - 1) * limit
-	users, total, err := h.Repo.GetUserList(c.Request.Context(), offset, limit, search)
+	users, total, err := h.Repo.GetUserList(c.Request.Context(), offset, limit, search, verified)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "Failed to fetch users"})
 		return
@@ -641,6 +715,38 @@ func mustJSON(v interface{}) string {
 	return string(data)
 }
 
+// parseImportedPubDate 解析导入数据中的 pub_date（C12 契约）：
+// 依次兼容毫秒整数、数字字符串与 ISO 字符串；无法解析时退回当前时间。
+func parseImportedPubDate(raw json.RawMessage) int64 {
+	text := strings.TrimSpace(string(raw))
+	if text == "" || text == "null" {
+		return time.Now().UnixMilli()
+	}
+
+	// 毫秒整数，或形如 "1712345678901" 的数字字符串
+	if n, err := strconv.ParseInt(strings.Trim(text, `"`), 10, 64); err == nil && n > 0 {
+		return n
+	}
+
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		s = strings.TrimSpace(s)
+		for _, layout := range []string{
+			time.RFC3339Nano,
+			time.RFC3339,
+			"2006-01-02T15:04:05.000Z",
+			"2006-01-02 15:04:05",
+			"2006-01-02",
+		} {
+			if t, err := time.Parse(layout, s); err == nil {
+				return t.UnixMilli()
+			}
+		}
+	}
+
+	return time.Now().UnixMilli()
+}
+
 // GetUserComments 获取指定用户的评论
 func (h *CommentHandler) GetUserComments(c *gin.Context) {
 	author := c.Query("author")
@@ -685,32 +791,72 @@ func (h *CommentHandler) GetUserComments(c *gin.Context) {
 	})
 }
 
-// ExportSettings 导出系统设置（含 email_password，不含 admin_name/admin_password）
+// validateSpamSettingsInBody 校验请求体中的审核自动化规则设置。
+//
+// 返回首个错误信息，全部通过返回空串。与 Node / Worker 同名校验逻辑一致。
+func validateSpamSettingsInBody(body map[string]string) string {
+	for key, value := range body {
+		if !utils.IsSpamSettingKey(key) {
+			continue
+		}
+		if msg := utils.ValidateSpamSetting(key, value); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
+// ExportSettings 导出系统设置（含 admin_name 与置空后的 email_password/admin_comment_key，不含 admin_password）
 func (h *CommentHandler) ExportSettings(c *gin.Context) {
 	all := utils.GetAllSettings()
 	filtered := make(map[string]string)
+	sensitiveExportKeys := map[string]bool{
+		"email_password":    true,
+		"admin_comment_key": true,
+	}
+	sensitiveOmitted := []string{}
 	allowList := map[string]bool{
-		"site_name": true, "admin_email": true,
+		// admin_name 也一并导出：否则「导出 → 导入」往返后管理员用户名会丢失（C12）
+		"site_name": true, "admin_email": true, "admin_name": true,
 		"smtp_host": true, "smtp_port": true, "email_user": true, "email_password": true, "email_secure": true,
 		"admin_comment_key": true,
 		"allow_origin":      true, "email_enabled": true,
 		"reply_template": true, "notification_template": true,
-	"ip_blacklist":          true,
-	"email_blacklist":       true,
-	"blogger_badge_enabled": true,
-	"blogger_badge_text":    true,
-	"placeholder_name":      true,
-	"placeholder_email":     true,
-	"placeholder_content":   true,
-	"placeholder_url":       true,
-	"email_verify_enabled":  true,
-	"verify_base_url":       true,
-	"comment_auto_approve":  true,
-	"admin_comment_key_enabled": true,
+		"ip_blacklist":                   true,
+		"email_blacklist":                true,
+		"blogger_badge_enabled":          true,
+		"blogger_badge_text":             true,
+		"placeholder_name":               true,
+		"placeholder_email":              true,
+		"placeholder_content":            true,
+		"placeholder_url":                true,
+		"email_verify_enabled":           true,
+		"verify_base_url":                true,
+		"comment_auto_approve":           true,
+		"comment_spam_keywords":          true,
+		"comment_spam_max_links":         true,
+		"comment_spam_min_length":        true,
+		"comment_spam_duplicate_window":  true,
+		"admin_comment_key_enabled":      true,
+		"comment_verify_enabled":         true,
+		"comment_verify_difficulty":      true,
+		"comment_verify_instr_enabled":   true,
+		"comment_verify_block_automated": true,
+		"comment_verify_retention_days":  true,
+		"comment_verify_log_challenge":   true,
+		"trust_proxy":                    true,
 	}
 	for key := range allowList {
 		if val, ok := all[key]; ok {
-			filtered[key] = val
+			// 敏感字段导出时置空：避免 SMTP 密码 / 博主密钥以明文落盘
+			if sensitiveExportKeys[key] {
+				filtered[key] = ""
+				if val != "" {
+					sensitiveOmitted = append(sensitiveOmitted, key)
+				}
+			} else {
+				filtered[key] = val
+			}
 		}
 	}
 	if _, ok := filtered["email_enabled"]; !ok {
@@ -719,12 +865,13 @@ func (h *CommentHandler) ExportSettings(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
-		"message": "Settings exported",
+		"message": "Settings exported. Sensitive fields (email_password, admin_comment_key) are blanked; please fill them in manually after importing.",
 		"data": gin.H{
-			"exportedAt": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-			"type":       "settings",
-			"version":    h.Version,
-			"settings":   filtered,
+			"exportedAt":       time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+			"type":             "settings",
+			"version":          h.Version,
+			"sensitiveOmitted": sensitiveOmitted,
+			"settings":         filtered,
 		},
 	})
 }
@@ -737,9 +884,27 @@ func (h *CommentHandler) ExportComments(c *gin.Context) {
 		return
 	}
 
-	resp := make([]model.AdminCommentResponse, 0)
+	// 导出契约与 Node/Worker 对齐（C12）：必须带上 parentId，
+	// 否则「导出 → 导入」会丢失回复关系
+	type exportComment struct {
+		ID          int64   `json:"id"`
+		PubDate     string  `json:"pubDate"`
+		PostSlug    string  `json:"postSlug"`
+		Author      string  `json:"author"`
+		Email       string  `json:"email"`
+		URL         *string `json:"url"`
+		IPAddress   *string `json:"ipAddress"`
+		OS          *string `json:"os"`
+		Browser     *string `json:"browser"`
+		ContentText string  `json:"contentText"`
+		ContentHtml string  `json:"contentHtml"`
+		ParentID    *int64  `json:"parentId,omitempty"`
+		Status      string  `json:"status"`
+	}
+
+	resp := make([]exportComment, 0)
 	for _, comm := range allComments {
-		resp = append(resp, model.AdminCommentResponse{
+		resp = append(resp, exportComment{
 			ID:          comm.ID,
 			PubDate:     time.UnixMilli(comm.PubDate).UTC().Format("2006-01-02T15:04:05.000Z"),
 			PostSlug:    comm.PostSlug,
@@ -751,6 +916,7 @@ func (h *CommentHandler) ExportComments(c *gin.Context) {
 			Browser:     comm.Browser,
 			ContentText: comm.ContentText,
 			ContentHtml: comm.ContentHTML,
+			ParentID:    comm.ParentID,
 			Status:      comm.Status,
 		})
 	}
@@ -772,18 +938,18 @@ func (h *CommentHandler) ExportComments(c *gin.Context) {
 func (h *CommentHandler) ImportComments(c *gin.Context) {
 	var body struct {
 		Comments []struct {
-			PostSlug    string  `json:"postSlug"`
-			Author      string  `json:"author"`
-			Email       string  `json:"email"`
-			URL         *string `json:"url"`
-			IPAddress   *string `json:"ipAddress"`
-			OS          *string `json:"os"`
-			Browser     *string `json:"browser"`
-			ContentText string  `json:"contentText"`
-			ContentHtml string  `json:"contentHtml"`
-			ParentID    *int64  `json:"parentId"`
-			Status      string  `json:"status"`
-			PubDate     string  `json:"pubDate"`
+			PostSlug    string          `json:"postSlug"`
+			Author      string          `json:"author"`
+			Email       string          `json:"email"`
+			URL         *string         `json:"url"`
+			IPAddress   *string         `json:"ipAddress"`
+			OS          *string         `json:"os"`
+			Browser     *string         `json:"browser"`
+			ContentText string          `json:"contentText"`
+			ContentHtml string          `json:"contentHtml"`
+			ParentID    *int64          `json:"parentId"`
+			Status      string          `json:"status"`
+			PubDate     json.RawMessage `json:"pubDate"`
 		} `json:"comments"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || len(body.Comments) == 0 {
@@ -798,27 +964,41 @@ func (h *CommentHandler) ImportComments(c *gin.Context) {
 			errors = append(errors, "第 "+strconv.Itoa(i+1)+" 条缺少必填字段")
 			continue
 		}
-		pubDate := time.Now().UnixMilli()
-		if cData.PubDate != "" {
-			if t, err := time.Parse("2006-01-02T15:04:05.000Z", cData.PubDate); err == nil {
-				pubDate = t.UnixMilli()
-			} else if t, err := time.Parse("2006-01-02T15:04:05Z", cData.PubDate); err == nil {
-				pubDate = t.UnixMilli()
+		pubDate := parseImportedPubDate(cData.PubDate)
+
+		// 导入路径同样必须净化：数据可能来自不可信文件
+		safeAuthor := utils.CheckContent(cData.Author)
+		safeText := utils.CheckContent(cData.ContentText)
+		if utf8.RuneCountInString(safeText) > MaxContentLen ||
+			utf8.RuneCountInString(safeAuthor) > MaxAuthorLen ||
+			len(cData.Email) > MaxEmailLen ||
+			len(cData.PostSlug) > MaxPostSlugLen {
+			errors = append(errors, "第 "+strconv.Itoa(i+1)+" 条字段超出长度限制")
+			continue
+		}
+
+		var safeURL *string
+		if cData.URL != nil {
+			if u := utils.SanitizeUrl(*cData.URL); u != "" {
+				safeURL = &u
 			}
 		}
+
 		comment := &model.Comment{
 			PostSlug:    cData.PostSlug,
-			Author:      cData.Author,
+			Author:      safeAuthor,
 			Email:       cData.Email,
-			URL:         cData.URL,
+			URL:         safeURL,
 			IPAddress:   cData.IPAddress,
 			OS:          cData.OS,
 			Browser:     cData.Browser,
-			ContentText: cData.ContentText,
-			ContentHTML: cData.ContentHtml,
+			ContentText: safeText,
+			// 不信任导入文件中的 contentHtml：统一由正文重新渲染并净化
+			ContentHTML: utils.SanitizeHtml(utils.ParseMarkdown(safeText)),
 			ParentID:    cData.ParentID,
-			Status:      "approved",
-			PubDate:     pubDate,
+			// 缺省状态与三端表默认值对齐：pending（最安全，C11/C12）
+			Status:  "pending",
+			PubDate: pubDate,
 		}
 		if cData.Status != "" {
 			comment.Status = cData.Status
@@ -858,35 +1038,67 @@ func (h *CommentHandler) ImportSettings(c *gin.Context) {
 	allowList := map[string]bool{
 		"site_name": true, "admin_email": true, "admin_name": true,
 		"smtp_host": true, "smtp_port": true, "email_user": true, "email_password": true, "email_secure": true,
-		"admin_comment_key": true,
-		"ip_blacklist":          true,
-		"email_blacklist":       true,
-		"blogger_badge_enabled": true,
-		"blogger_badge_text":    true,
-		"placeholder_name":      true,
-		"placeholder_email":     true,
-		"placeholder_content":   true,
-		"placeholder_url":       true,
-		"email_verify_enabled":  true,
-		"verify_base_url":       true,
-		"comment_auto_approve":  true,
-		"admin_comment_key_enabled": true,
-		"allow_origin":      true, "email_enabled": true,
+		"admin_comment_key":              true,
+		"ip_blacklist":                   true,
+		"email_blacklist":                true,
+		"blogger_badge_enabled":          true,
+		"blogger_badge_text":             true,
+		"placeholder_name":               true,
+		"placeholder_email":              true,
+		"placeholder_content":            true,
+		"placeholder_url":                true,
+		"email_verify_enabled":           true,
+		"verify_base_url":                true,
+		"comment_auto_approve":           true,
+		"comment_spam_keywords":          true,
+		"comment_spam_max_links":         true,
+		"comment_spam_min_length":        true,
+		"comment_spam_duplicate_window":  true,
+		"admin_comment_key_enabled":      true,
+		"comment_verify_enabled":         true,
+		"comment_verify_difficulty":      true,
+		"comment_verify_instr_enabled":   true,
+		"comment_verify_block_automated": true,
+		"comment_verify_retention_days":  true,
+		"comment_verify_log_challenge":   true,
+		"trust_proxy":                    true,
+		"allow_origin":                   true, "email_enabled": true,
 		"reply_template": true, "notification_template": true,
 	}
 
-	updated := 0
+	// 黑名单格式校验：非法条目会让规则失效甚至误伤全部 IP，必须在入口拦下
+	if raw, ok := body["ip_blacklist"]; ok && !utils.ValidateIPBlacklistJSON(raw) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "ip_blacklist must be a JSON array of valid IP or CIDR strings",
+		})
+		return
+	}
+
+	// 审核自动化规则同样必须在入口校验（导入文件可能来自不可信来源）
+	if msg := validateSpamSettingsInBody(body); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": msg})
+		return
+	}
+
+	// 契约与 Node/Worker 对齐（C12）：返回已更新的键名数组；空字符串照写（用于清空配置），
+	// 仅导出时被置空的敏感字段留空表示「未修改」
+	updated := make([]string, 0)
 	for key, value := range body {
-		if allowList[key] && value != "" {
-			if err := utils.SetSetting(key, value); err == nil {
-				updated++
-			}
+		if !allowList[key] {
+			continue
+		}
+		if (key == "email_password" || key == "admin_comment_key") && value == "" {
+			continue
+		}
+		if err := utils.SetSetting(key, value); err == nil {
+			updated = append(updated, key)
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    200,
-		"message": "设置导入完成，已更新 " + strconv.Itoa(updated) + " 项",
+		"message": "设置导入完成，已更新 " + strconv.Itoa(len(updated)) + " 项",
 		"data":    gin.H{"updated": updated},
 	})
 }

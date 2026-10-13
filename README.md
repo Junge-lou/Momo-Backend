@@ -25,12 +25,14 @@
 ## 主要功能
 
 - 💬 **多级嵌套评论** — 支持无限层级的树形回复，Markdown 编辑，自动渲染 HTML
-- 🛡️ **安全防护** — IP 封禁、黑名单（IP/邮箱）、XSS 过滤、评论频率限制、管理员评论密钥验证，邮箱认证
-- 📧 **邮件通知** — SMTP 配置，新评论及回复自动通知，支持自定义模板
-- 📊 **管理面板** — 评论审核、数据概览统计、用户管理、模块化系统设置
+- 🤖 **两层无感验证** — Turnstile 风格人机验证，真人零点击。第一层是 **HashWX 工作量证明**（每次挑战生成一次性函数，GPU 相对 CPU 的吞吐优势从 SHA-256 的约 150 倍降到约 2 倍）；第二层是 **Instrumentation 环境质询**（服务端下发随机程序，要求浏览器真实执行并回传环境特征，默认关闭）。另有蜜罐字段 + IP 绑定票据，无需任何第三方服务
+- 🛡️ **安全防护** — IP 封禁、黑名单（IP/邮箱）、XSS 过滤、评论频率限制、管理员评论密钥验证、反向代理真实 IP 识别
+- 📧 **邮件通知** — SMTP 配置，新评论及回复自动通知，支持自定义模板与邮箱验证
+- 📈 **认证记录** — 每一次人机验证的签发/通过/失败、解题耗时与来源 IP 都会落库：管理面板提供指标卡、趋势折线、失败原因与地域/运营商 Top 榜（地域数据仅 Cloudflare Worker 部署有），保留期与是否记录签发事件均可配置
+- 📊 **管理面板** — 评论审核、数据概览统计、认证记录分析、用户搜索与黑名单管理、模块化系统设置
 - ⚡ **多后端支持** — Node.js 、Go 、Cloudflare Worker 三种实现
 - 🔄 **数据管理** — JSON 格式导入/导出，方便备份迁移
-- 🎨 **前端组件** — Svelte 5 构建的轻量评论组件，支持 CDN 引入和自定义占位符
+- 🎨 **前端组件** — Svelte 5 构建的轻量评论组件，支持 CDN 引入、多语言、暗色模式和自定义占位符
 - 🗄️ **SQLite 存储** — 零配置数据库，无需额外安装数据库服务
 
 
@@ -65,19 +67,26 @@ API 应用基于 SQLite 数据库，对外提供 RESTful API，目前提供四�
 
 #### Docker 部署
 
-Go 版本支持 Docker 一键部署，镜像发布在 GitHub Container Registry。
+Go 版本支持 Docker 一键部署，镜像同时发布在 GitHub Container Registry 与 Docker Hub。
 
 ```bash
 # 使用 docker-compose（推荐）
 curl -fsSLO https://raw.githubusercontent.com/Motues/Momo-backend/main/docker-compose.yml
 docker compose up -d
 
-# 或直接运行
+# 或直接运行（两个仓库内容相同，任选其一）
 docker run -d \
   --name momo-backend \
   -p 3000:3000 \
   -v momo-data:/app/data \
   ghcr.io/motues/momo-backend:latest
+
+# Docker Hub
+docker run -d \
+  --name momo-backend \
+  -p 3000:3000 \
+  -v momo-data:/app/data \
+  motues/momo-backend:latest
 ```
 
 启动后访问 `http://localhost:3000`，默认管理员账号密码均为 `momo`。
@@ -122,6 +131,33 @@ docker run -d \
 * [数据库表结构](./doc/data_table.md) — 数据表字段说明
 * [更新文档](./doc/update.md) — 版本升级指南
 * [Momo 静态博客](https://github.com/Motues/Momo) — 配套博客主题
+
+## 测试
+
+三套后端、管理面板与前端组件都配有自动化测试。除 Go 使用标准库 `testing` 外，其余均使用 [Vitest](https://vitest.dev/)。
+
+```bash
+# 三套后端
+cd nodejs && pnpm test       # Hono + Drizzle：纯逻辑单测 + 真实 SQLite 上的接口集成测试
+cd worker && pnpm test       # vitest-pool-workers：纯逻辑单测 + 内存 D1 / KV 上的接口集成测试
+cd go     && go test ./...   # utils、repository、handler 三层
+
+# 前端与管理面板
+cd frontend  && pnpm test
+cd dashboard && pnpm test
+```
+
+### 关于两处测试环境的限制（重要）
+
+1. **协议一致性靠共享固定向量保证**：`doc/vectors/` 下的两份 JSON 是 Node / Go / Worker / 前端共同读取的
+   验收基准，任何一端改了派生口径都会被测试立刻抓住。详见 [doc/vectors/README.md](./doc/vectors/README.md)。
+2. **Worker 的真实 HashWX 二进制无法在本地测试环境里加载**，原因有两条（均已实测）：
+   - workerd 禁止运行时编译 WebAssembly（`Wasm code generation disallowed by embedder`），所以只能静态 `import` `.wasm`；
+   - `vitest-pool-workers` 在本地解析相对 `.wasm` 导入时会用错基准目录而报 `No such module`。
+
+   因此 Worker 侧是「**用 `vi.mock` 把 hashwx 模块换成纯 JS 替身来测协议**」+
+   「算法正确性由 Node 侧对**同一个二进制**跑官方 KAT 保证」。
+   改动 Worker 的 HashWX 接入方式时，请务必用 `wrangler dev` 做一次真实的端到端验证。
 
 ## 开发计划
 

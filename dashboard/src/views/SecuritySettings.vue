@@ -44,6 +44,39 @@
         <p class="text-xs text-gray-400 mt-1">输入域名后按回车或点击"添加"，点击标签上的 × 可删除</p>
       </section>
 
+      <!-- 客户端 IP 识别 -->
+      <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-network-wired text-sky-500"></i> 客户端 IP 识别
+        </h2>
+        <p class="text-sm text-gray-500 mb-4">
+          默认只使用 TCP 连接的对端地址识别访客 IP，因此伪造
+          <code class="bg-gray-100 px-1.5 rounded text-gray-600 text-xs">CF-Connecting-IP</code> /
+          <code class="bg-gray-100 px-1.5 rounded text-gray-600 text-xs">X-Real-IP</code> /
+          <code class="bg-gray-100 px-1.5 rounded text-gray-600 text-xs">X-Forwarded-For</code>
+          无法绕过 IP 黑名单、登录失败锁定与评论频率限制。
+          <strong>本站部署在 Nginx / Cloudflare 等反向代理之后时请开启本开关</strong>，
+          否则所有访客都会被识别成代理 IP，导致频率限制误伤全站。
+        </p>
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-medium text-gray-700">信任反向代理下发的 IP 头</p>
+            <p class="text-xs text-gray-400 mt-1">开启后 X-Forwarded-For 取最右一跳，客户端伪造的前置条目不会生效</p>
+          </div>
+          <label class="relative shrink-0 ms-4 inline-flex items-center cursor-pointer">
+            <input type="checkbox" v-model="trustProxy" class="sr-only peer">
+            <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-sky-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-600"></div>
+            <span class="ms-3 text-sm font-medium whitespace-nowrap text-gray-700">
+              {{ trustProxy ? '已开启' : '已关闭' }}
+            </span>
+          </label>
+        </div>
+        <p v-if="trustProxyOverrideHint"
+          class="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+          <i class="fa-solid fa-triangle-exclamation mr-1"></i>{{ trustProxyOverrideHint }}
+        </p>
+      </section>
+
       <!-- 管理员评论密钥 -->
       <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
@@ -58,10 +91,10 @@
               <p class="text-sm font-medium text-gray-700">启用评论密钥</p>
               <p class="text-xs text-gray-400 mt-1">开启后前台发表管理员评论时需要输入密钥验证</p>
             </div>
-            <label class="relative inline-flex items-center cursor-pointer">
+            <label class="relative shrink-0 ms-4 inline-flex items-center cursor-pointer">
               <input type="checkbox" v-model="adminCommentKeyEnabled" class="sr-only peer">
-              <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-              <span class="ms-3 text-sm font-medium text-gray-700">
+              <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+              <span class="ms-3 text-sm font-medium whitespace-nowrap text-gray-700">
                 {{ adminCommentKeyEnabled ? '已启用' : '已禁用' }}
               </span>
             </label>
@@ -71,6 +104,114 @@
             <input v-model="adminCommentKey" type="password" placeholder="输入管理员评论密钥"
               class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm" />
             <p class="text-xs text-gray-400 mt-1">关闭开关后密钥将被清除</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 人机验证（无感验证） -->
+      <section class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+          <i class="fa-solid fa-shield-halved text-emerald-500"></i> 人机验证
+        </h2>
+        <p class="text-sm text-gray-500 mb-4">
+          开启后，评论区会在「预览」按钮左侧显示一个验证框。浏览器在后台静默完成一次工作量证明，真人无需任何点击；
+          机械化的批量提交会因为计算成本而明显受限。默认关闭。
+        </p>
+        <div class="space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-sm font-medium text-gray-700">启用无感验证</p>
+              <p class="text-xs text-gray-400 mt-1">开启后提交评论必须携带验证凭证，博主使用管理员密钥时自动放行</p>
+            </div>
+            <label class="relative shrink-0 ms-4 inline-flex items-center cursor-pointer">
+              <input type="checkbox" v-model="commentVerifyEnabled" class="sr-only peer">
+              <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              <span class="ms-3 text-sm font-medium whitespace-nowrap text-gray-700">
+                {{ commentVerifyEnabled ? '已启用' : '已禁用' }}
+              </span>
+            </label>
+          </div>
+          <div v-if="commentVerifyEnabled" class="max-w-md">
+            <label class="block text-sm font-medium text-gray-700 mb-1">验证强度</label>
+            <SelectMenu v-model="commentVerifyDifficulty" class="w-full" accent="emerald" title="算力证明强度"
+              :options="[
+                { label: '低（约 25 万次计算：桌面不到 0.3 秒，低端手机约 1–2 秒）', value: '250000' },
+                { label: '中（约 100 万次计算，推荐：桌面约 1 秒，低端手机 3–6 秒）', value: '1000000' },
+                { label: '高（约 400 万次计算：桌面约 4 秒，低端手机可能 15 秒以上）', value: '4000000' },
+              ]" />
+            <p class="text-xs text-gray-400 mt-1">
+              数值为访客需要完成的哈希计算总次数（会分摊到 4 个子挑战并行求解）。强度越高越能拦住机器人，
+              但等待时间也越长；手机性能通常只有桌面的 1/5 到 1/10，请按主要访客的设备选择。
+            </p>
+          </div>
+
+          <!-- 第二层：Instrumentation 环境质询 -->
+          <div v-if="commentVerifyEnabled" class="border-t border-gray-100 pt-4 space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm font-medium text-gray-700">启用环境质询（第二层）</p>
+                <p class="text-xs text-gray-400 mt-1">
+                  在算力证明之外，再要求访客的浏览器真实执行一段随机生成的程序并回传环境特征。
+                  与算力证明互补：一个证明「付出了算力」，一个证明「计算真的发生在浏览器里」。默认关闭。
+                </p>
+              </div>
+              <label class="relative shrink-0 ms-4 inline-flex items-center cursor-pointer">
+                <input type="checkbox" v-model="commentVerifyInstrEnabled" class="sr-only peer">
+                <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                <span class="ms-3 text-sm font-medium whitespace-nowrap text-gray-700">
+                  {{ commentVerifyInstrEnabled ? '已启用' : '已禁用' }}
+                </span>
+              </label>
+            </div>
+
+            <div v-if="commentVerifyInstrEnabled" class="flex items-center justify-between pl-4 border-l-2 border-gray-100">
+              <div>
+                <p class="text-sm font-medium text-gray-700">命中自动化特征时拒绝</p>
+                <p class="text-xs text-gray-400 mt-1">
+                  默认只把命中的特征写进日志、不拦截任何人。开启前请先观察日志确认没有误伤
+                  （Tor Browser 的字体整数量化、混合 DPI 多显示器环境都可能被误判）。
+                  注意：有头原生 Chrome 配 undetected-chromedriver 这类工具可以绕过全部检测，
+                  真正让批量滥用变贵的是第一层的算力证明。
+                </p>
+              </div>
+              <label class="relative shrink-0 ms-4 inline-flex items-center cursor-pointer">
+                <input type="checkbox" v-model="commentVerifyBlockAutomated" class="sr-only peer">
+                <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                <span class="ms-3 text-sm font-medium whitespace-nowrap text-gray-700">
+                  {{ commentVerifyBlockAutomated ? '已开启' : '仅记录' }}
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 认证记录（保留策略）：数据在「认证记录」页展示，见 router 的 /verify-records -->
+          <div v-if="commentVerifyEnabled" class="border-t border-gray-100 pt-4 space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm font-medium text-gray-700">记录签发事件</p>
+                <p class="text-xs text-gray-400 mt-1">
+                  默认记录每一次挑战签发。关闭后只记录通过/失败，能明显降低写入量
+                  （签发事件在评论框加载时就会产生，是记录条数的主要来源），
+                  代价是看不到「签发了但没人提交答案」的情况。
+                </p>
+              </div>
+              <label class="relative shrink-0 ms-4 inline-flex items-center cursor-pointer">
+                <input type="checkbox" v-model="commentVerifyLogChallenge" class="sr-only peer">
+                <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                <span class="ms-3 text-sm font-medium whitespace-nowrap text-gray-700">
+                  {{ commentVerifyLogChallenge ? '已记录' : '仅结果' }}
+                </span>
+              </label>
+            </div>
+
+            <div class="max-w-md">
+              <label class="block text-sm font-medium text-gray-700 mb-1">认证记录保留天数</label>
+              <input v-model.number="commentVerifyRetentionDays" type="number" min="0" max="3650" step="1"
+                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm" />
+              <p class="text-xs text-gray-400 mt-1">
+                超期记录会被自动清理（默认 30 天，上限 3650 天）。设为 <code class="bg-gray-100 px-1 rounded text-gray-600">0</code> 表示永久保留 —— 访客 IP 会随记录长期留在数据库里，请谨慎选择。
+              </p>
+            </div>
           </div>
         </div>
       </section>
@@ -151,11 +292,12 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import request from '../utils/request'
 import toast from '../utils/toast'
 import AdminLayout from '../components/AdminLayout.vue'
+import SelectMenu from '../components/SelectMenu.vue'
 
 const router = useRouter()
 const apiUrl = ref(localStorage.getItem('apiUrl') || window.location.origin)
@@ -169,6 +311,41 @@ const newIpEntry = ref('')
 const newEmailEntry = ref('')
 const adminCommentKey = ref('')
 const adminCommentKeyEnabled = ref(false)
+const commentVerifyEnabled = ref(false)
+// 总哈希计算次数（协议 v2 语义）。默认值与后端 HASHWX_DEFAULT_DIFFICULTY 保持一致，
+// 这样「未设置过」的部署打开本页时选中「中」，保存后不会意外改变验证强度。
+const commentVerifyDifficulty = ref('1000000')
+// 第二层环境质询：默认关闭，与后端 comment_verify_instr_enabled 默认值一致
+const commentVerifyInstrEnabled = ref(false)
+// 命中自动化特征时是否拒绝：默认关闭，只记录日志
+const commentVerifyBlockAutomated = ref(false)
+// 认证记录：是否记录「签发挑战」事件（默认记录）与保留天数（0 = 永久保留）
+const commentVerifyLogChallenge = ref(true)
+const commentVerifyRetentionDays = ref(30)
+
+/** 保留天数归一化：非法输入按默认 30 天处理，负数按 0（永久保留），上限 3650 */
+const normalizedRetentionDays = computed(() => {
+  const parsed = parseInt(commentVerifyRetentionDays.value, 10)
+  if (!Number.isFinite(parsed)) return 30
+  if (parsed <= 0) return 0
+  return Math.min(parsed, 3650)
+})
+// 客户端 IP 识别：是否信任反向代理下发的 IP 头
+const trustProxy = ref(false)
+const trustProxyOverride = ref('')
+
+const trustProxyOverrideHint = computed(() => {
+  switch (trustProxyOverride.value) {
+    case 'env':
+      return '该开关已被环境变量 TRUST_PROXY 强制指定，页面上的修改不会生效。'
+    case 'config':
+      return '该开关已被 config.yaml 中的 TRUST_PROXY 强制指定，页面上的修改不会生效。'
+    case 'worker':
+      return 'Cloudflare Worker 部署始终使用 Cloudflare 提供的 cf-connecting-ip，此开关在该形态下无需设置。'
+    default:
+      return ''
+  }
+})
 
 const originList = ref([])
 const newOrigin = ref('')
@@ -212,9 +389,22 @@ const removeEmailEntry = (index) => {
 const isDirty = ref(false)
 let initialSnapshot = ''
 
-const takeSnapshot = () => JSON.stringify({ ipList: [...ipBlacklist.value], emailList: [...emailBlacklist.value], origins: [...originList.value], adminKey: adminCommentKey.value, keyEnabled: adminCommentKeyEnabled.value })
+const takeSnapshot = () => JSON.stringify({
+  ipList: [...ipBlacklist.value],
+  emailList: [...emailBlacklist.value],
+  origins: [...originList.value],
+  adminKey: adminCommentKey.value,
+  keyEnabled: adminCommentKeyEnabled.value,
+  verifyEnabled: commentVerifyEnabled.value,
+  verifyDifficulty: commentVerifyDifficulty.value,
+  verifyInstrEnabled: commentVerifyInstrEnabled.value,
+  verifyBlockAutomated: commentVerifyBlockAutomated.value,
+  verifyLogChallenge: commentVerifyLogChallenge.value,
+  verifyRetentionDays: commentVerifyRetentionDays.value,
+  trustProxy: trustProxy.value,
+})
 
-watch([ipBlacklist, emailBlacklist, originList], () => {
+watch([ipBlacklist, emailBlacklist, originList, adminCommentKey, adminCommentKeyEnabled, commentVerifyEnabled, commentVerifyDifficulty, commentVerifyInstrEnabled, commentVerifyBlockAutomated, commentVerifyLogChallenge, commentVerifyRetentionDays, trustProxy], () => {
   isDirty.value = takeSnapshot() !== initialSnapshot
 }, { deep: true })
 
@@ -241,6 +431,16 @@ const loadSettings = async () => {
     if (res.code === 200 && res.data) {
       adminCommentKey.value = res.data.admin_comment_key || ''
       adminCommentKeyEnabled.value = res.data.admin_comment_key_enabled === 'true'
+      commentVerifyEnabled.value = res.data.comment_verify_enabled === 'true'
+      commentVerifyDifficulty.value = res.data.comment_verify_difficulty || '1000000'
+      commentVerifyInstrEnabled.value = res.data.comment_verify_instr_enabled === 'true'
+      commentVerifyBlockAutomated.value = res.data.comment_verify_block_automated === 'true'
+      // 默认记录签发事件（后端默认值也是「非 false 即记录」）
+      commentVerifyLogChallenge.value = res.data.comment_verify_log_challenge !== 'false'
+      const retention = parseInt(res.data.comment_verify_retention_days ?? '30', 10)
+      commentVerifyRetentionDays.value = Number.isFinite(retention) ? retention : 30
+      trustProxy.value = res.data.trust_proxy === 'true'
+      trustProxyOverride.value = res.data.trust_proxy_override || ''
       try {
         ipBlacklist.value = res.data.ip_blacklist ? JSON.parse(res.data.ip_blacklist) : []
         if (!Array.isArray(ipBlacklist.value)) ipBlacklist.value = []
@@ -277,6 +477,13 @@ const saveSettings = async () => {
       ip_blacklist: JSON.stringify(ipBlacklist.value),
       email_blacklist: JSON.stringify(emailBlacklist.value),
       admin_comment_key_enabled: adminCommentKeyEnabled.value ? 'true' : 'false',
+      comment_verify_enabled: commentVerifyEnabled.value ? 'true' : 'false',
+      comment_verify_difficulty: commentVerifyDifficulty.value,
+      comment_verify_instr_enabled: commentVerifyInstrEnabled.value ? 'true' : 'false',
+      comment_verify_block_automated: commentVerifyBlockAutomated.value ? 'true' : 'false',
+      comment_verify_log_challenge: commentVerifyLogChallenge.value ? 'true' : 'false',
+      comment_verify_retention_days: String(normalizedRetentionDays.value),
+      trust_proxy: trustProxy.value ? 'true' : 'false',
     }
     if (adminCommentKeyEnabled.value && adminCommentKey.value) {
       payload.admin_comment_key = adminCommentKey.value
@@ -293,6 +500,8 @@ const saveSettings = async () => {
     }
   } catch (e) {
     console.error('Failed to save settings:', e)
+    // 后端会校验 IP 黑名单格式，失败原因（如非法 IP/CIDR）需要展示给用户
+    toast.error(e?.message || '安全设置保存失败')
   } finally {
     loading.value = false
   }
