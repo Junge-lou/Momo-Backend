@@ -4,6 +4,7 @@ import { Bindings } from '../../bindings';
 import { sendCommentNotification, sendCommentReplyNotification, sendVerificationEmail, checkEmailVerified, hasUnverifiedToken, saveVerificationToken } from '../../utils/email';
 import { isEmailEnabled, getSetting } from '../../utils/settings';
 import { parseMarkdown } from '../../utils/markdown';
+import { isRequestOriginAllowed } from '../../utils/cors';
 
 // 检查内容，删除 XSS 攻击脚本
 export function checkContent(content: string): string {
@@ -68,7 +69,13 @@ async function getCommentStatus(env: Bindings): Promise<string> {
 }
 
 export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
-  const data = await c.req.json();
+    // 0. 服务端来源校验：CORS 挡不住服务器转发的跨站提交（浏览器机制），
+    //    Origin/Referer 存在且不在 allow_origin 白名单时直接拒绝
+    if (!(await isRequestOriginAllowed(c.env, c.req.header('origin'), c.req.header('referer')))) {
+        return c.json({ code: 403, message: "Origin not allowed" }, 403);
+    }
+
+    const data = await c.req.json();
   const userAgent = c.req.header('user-agent') || "";
 
   // 1. 必填字段校验

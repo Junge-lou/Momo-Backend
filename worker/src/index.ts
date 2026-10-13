@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { Bindings } from './bindings'
-import { customCors } from './utils/cors'
+import { customCors, originGuard } from './utils/cors'
 import { getSetting } from './utils/settings'
 import { adminAuth } from './utils/auth'
 
@@ -31,7 +31,7 @@ app.use('/api/*', async (c, next) => {
 
 // API
 app.get('/api/comments', getComments)
-app.post('/api/comments', postComment)
+app.post('/api/comments', originGuard, postComment)
 app.get('/api/verify-email/verify', verifyEmail)
 
 app.post('/admin/login', adminLogin)
