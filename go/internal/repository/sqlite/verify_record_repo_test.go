@@ -32,6 +32,7 @@ type storedVerifyRecord struct {
 	ChallengeID sql.NullString `db:"challenge_id"`
 	PostSlug    sql.NullString `db:"post_slug"`
 	IPAddress   sql.NullString `db:"ip_address"`
+	Origin      sql.NullString `db:"origin"`
 	Country     sql.NullString `db:"country"`
 	Network     sql.NullString `db:"network"`
 	ASN         sql.NullInt64  `db:"asn"`
@@ -97,6 +98,7 @@ func TestRecordVerifyEventStoresAllColumns(t *testing.T) {
 		ChallengeID: "cid-1",
 		PostSlug:    "/posts/x",
 		IP:          "203.0.113.5",
+		Origin:      "https://blog.example.com",
 		ASN:         &asn,
 	})
 	after := time.Now().UnixMilli()
@@ -131,6 +133,9 @@ func TestRecordVerifyEventStoresAllColumns(t *testing.T) {
 	if !row.ASN.Valid || row.ASN.Int64 != 64512 {
 		t.Errorf("asn 期望 64512，实际 %v", row.ASN)
 	}
+	if !row.Origin.Valid || row.Origin.String != "https://blog.example.com" {
+		t.Errorf("origin 期望 https://blog.example.com，实际 %v", row.Origin)
+	}
 	// 空字符串必须落成 NULL（与 Node/Worker 的 ?? null 一致），而不是空串
 	if row.Reason.Valid || row.Country.Valid || row.Network.Valid {
 		t.Errorf("空的 reason/country/network 应为 NULL，实际 %v / %v / %v",
@@ -144,19 +149,66 @@ func TestRecordVerifyEventStoresAllColumns(t *testing.T) {
 	empty := rows[len(rows)-1]
 	if empty.Reason.Valid || empty.ElapsedMs.Valid || empty.Difficulty.Valid ||
 		empty.ChallengeID.Valid || empty.PostSlug.Valid || empty.IPAddress.Valid ||
-		empty.Country.Valid || empty.Network.Valid || empty.ASN.Valid {
+		empty.Origin.Valid || empty.Country.Valid || empty.Network.Valid || empty.ASN.Valid {
 		t.Errorf("缺省的可选字段必须全部为 NULL，实际 %+v", empty)
 	}
 
-	// 文本字段在数据库里必须是 NULL 而不是空串
+	// 文本字段在数据库里必须是 NULL 而不是空串（origin 尤其如此：
+	// 未开启域名绑定时没有来源域名，不该在表里留下空串）
 	var nulls int
 	if err := db.Get(&nulls, `SELECT COUNT(*) FROM VerifyRecord
-		WHERE id = ? AND reason IS NULL AND challenge_id IS NULL AND post_slug IS NULL AND ip_address IS NULL`,
+		WHERE id = ? AND reason IS NULL AND challenge_id IS NULL AND post_slug IS NULL AND ip_address IS NULL AND origin IS NULL`,
 		empty.ID); err != nil {
 		t.Fatalf("检查 NULL 失败: %v", err)
 	}
 	if nulls != 1 {
 		t.Errorf("空字符串应写为 NULL（IS NULL 判定），实际不满足")
+	}
+
+	// 空串与 NULL 等价：显式传空串同样必须落 NULL
+	repo.RecordVerifyEvent(ctx, model.VerifyRecordInput{Event: model.VerifyEventFail, Origin: ""})
+	rows = readVerifyRows(t, db)
+	if rows[len(rows)-1].Origin.Valid {
+		t.Errorf("空串 origin 必须落 NULL，实际 %q", rows[len(rows)-1].Origin.String)
+	}
+}
+
+// TestListVerifyRecordsMapsOrigin origin 列必须原样映射到明细行，空值归一为 ""。
+//
+// 后台的明细接口按字段名下发（Node 侧同样有 origin 字段），任何一端漏掉或改名都会
+// 让运维看不到「哪个域名在尝试」。
+func TestListVerifyRecordsMapsOrigin(t *testing.T) {
+	db, repo := newTestRepo(t)
+	ctx := context.Background()
+
+	// 保留天数为 0（永久保留），避免惰性清理把刚写入的行删掉
+	setVerifySetting(t, db, "comment_verify_retention_days", "0")
+
+	seeds := []model.VerifyRecordInput{
+		{Event: model.VerifyEventChallenge, PostSlug: "/posts/a", IP: "203.0.113.1", Origin: "https://blog.example.com"},
+		{Event: model.VerifyEventFail, Reason: "domain:deny:not_allowed", PostSlug: "/posts/a", IP: "203.0.113.1", Origin: "https://evil.example"},
+		{Event: model.VerifyEventChallenge, PostSlug: "/posts/a", IP: "203.0.113.1"},
+	}
+	for _, seed := range seeds {
+		repo.RecordVerifyEvent(ctx, seed)
+	}
+
+	list, err := repo.ListVerifyRecords(ctx, model.VerifyRecordQuery{Page: 1, PageSize: 20, Days: 0})
+	if err != nil {
+		t.Fatalf("ListVerifyRecords 失败: %v", err)
+	}
+	if len(list.List) != 3 {
+		t.Fatalf("应返回 3 条记录，实际 %d 条", len(list.List))
+	}
+
+	// 按 created_at DESC, id DESC：最后写入的（无 origin）在最前
+	for i, want := range []string{"", "https://evil.example", "https://blog.example.com"} {
+		if got := list.List[i].Origin; got != want {
+			t.Errorf("第 %d 行的 origin 期望 %q，实际 %q", i, want, got)
+		}
+	}
+	if got := list.List[1].Reason; got != "domain:deny:not_allowed" {
+		t.Errorf("被拒记录应保留域名原因，实际 %q", got)
 	}
 }
 

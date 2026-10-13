@@ -56,8 +56,8 @@ const checkboxByLabel = (labelText) => {
 
 /**
  * 人机验证 section 里的复选框，按 DOM 顺序：
- *   [0] 启用无感验证  [1] 启用环境质询（第二层）  [2] 命中自动化特征时拒绝  [3] 记录签发事件
- * 后三个只在前面开启后才存在，所以每次都要重新查询。
+ *   [0] 启用无感验证  [1] 启用环境质询（第二层）  [2] 命中自动化特征时拒绝  [3] 来源域名绑定  [4] 记录签发事件
+ * 后四个只在前面开启后才存在，所以每次都要重新查询。
  * 不能用 checkboxByLabel：它只取 section 里的第一个复选框。
  */
 const verifyToggles = () =>
@@ -382,8 +382,8 @@ describe('SecuritySettings - 管理员密钥与人机验证', () => {
 		await verifyToggles()[0].setValue(true);
 		await verifyToggles()[1].setValue(true);
 		expect(wrapper.vm.commentVerifyInstrEnabled).toBe(true);
-		// 开启无感验证后：启用无感验证 / 第二层 / 命中即拒绝 / 记录签发事件
-		expect(verifyToggles().length).toBe(4);
+		// 开启无感验证后：启用无感验证 / 第二层 / 命中即拒绝 / 来源域名绑定 / 记录签发事件
+		expect(verifyToggles().length).toBe(5);
 
 		await verifyToggles()[2].setValue(true);
 		expect(wrapper.vm.commentVerifyBlockAutomated).toBe(true);
@@ -425,9 +425,9 @@ describe('SecuritySettings - 认证记录保留策略', () => {
 		expect(wrapper.text()).toContain('认证记录保留天数');
 		expect(wrapper.text()).toContain('已记录');
 
-		// 未开启第二层时该区块只有三个复选框：启用无感验证 / 环境质询 / 记录签发事件
-		expect(verifyToggles()).toHaveLength(3);
-		await verifyToggles()[2].setValue(false);
+		// 未开启第二层时该区块有四个复选框：启用无感验证 / 环境质询 / 来源域名绑定 / 记录签发事件
+		expect(verifyToggles()).toHaveLength(4);
+		await verifyToggles()[3].setValue(false);
 		expect(wrapper.vm.commentVerifyLogChallenge).toBe(false);
 		expect(wrapper.text()).toContain('仅结果');
 	});
@@ -470,6 +470,69 @@ describe('SecuritySettings - 认证记录保留策略', () => {
 	});
 });
 
+describe('SecuritySettings - 来源域名绑定', () => {
+	it('默认关闭，且未启用无感验证时不展示', async () => {
+		await mountSettings();
+		expect(wrapper.vm.commentVerifyDomainEnabled).toBe(false);
+		// 未启用无感验证时该区块只有「启用无感验证」一个复选框
+		expect(verifyToggles().length).toBe(1);
+	});
+
+	it('加载时回填开关状态', async () => {
+		await mountSettings({
+			code: 200,
+			data: { comment_verify_enabled: 'true', comment_verify_domain_enabled: 'true' },
+		});
+		expect(wrapper.vm.commentVerifyDomainEnabled).toBe(true);
+	});
+
+	it('开启后保存写为 true', async () => {
+		await mountSettings({ code: 200, data: { comment_verify_enabled: 'true' } });
+		// 未开启第二层时：[0] 启用无感验证 [1] 环境质询 [2] 来源域名绑定 [3] 记录签发事件
+		await verifyToggles()[2].setValue(true);
+		expect(wrapper.vm.commentVerifyDomainEnabled).toBe(true);
+
+		await saveButton().trigger('click');
+		await flushPromises();
+		expect(lastPayload().comment_verify_domain_enabled).toBe('true');
+	});
+
+	it('白名单为空或含 * 时给出 fail-closed 告警', async () => {
+		// 空白名单
+		await mountSettings({
+			code: 200,
+			data: { comment_verify_enabled: 'true', comment_verify_domain_enabled: 'true' },
+		});
+		expect(wrapper.vm.domainWhitelistUsable).toBe(false);
+		expect(wrapper.text()).toContain('拒绝所有');
+
+		// 只有 * 也算不可用
+		wrapper.vm.originList = ['*'];
+		await flushPromises();
+		expect(wrapper.vm.domainWhitelistUsable).toBe(false);
+		expect(wrapper.text()).toContain('拒绝所有');
+	});
+
+	it('白名单可用时展示生效中的域名，不再告警', async () => {
+		await mountSettings({
+			code: 200,
+			data: {
+				comment_verify_enabled: 'true',
+				comment_verify_domain_enabled: 'true',
+				allow_origin: 'https://blog.example.com',
+			},
+		});
+		expect(wrapper.vm.domainWhitelistUsable).toBe(true);
+		expect(wrapper.text()).not.toContain('拒绝所有');
+		expect(wrapper.text()).toContain('生效中的白名单');
+	});
+
+	it('关闭域名绑定时不展示告警（即使白名单为空）', async () => {
+		await mountSettings({ code: 200, data: { comment_verify_enabled: 'true' } });
+		expect(wrapper.text()).not.toContain('拒绝所有');
+	});
+});
+
 describe('SecuritySettings - 保存载荷', () => {
 	it('保存请求为 PUT /admin/settings', async () => {
 		await mountSettings();
@@ -479,7 +542,7 @@ describe('SecuritySettings - 保存载荷', () => {
 		expect(requestMock.put.mock.calls[0][0]).toBe('/admin/settings');
 	});
 
-	it('提交的键集合固定为 12 项（含用于清除密钥的空 admin_comment_key）', async () => {
+	it('提交的键集合固定为 13 项（含用于清除密钥的空 admin_comment_key）', async () => {
 		await mountSettings();
 		await saveButton().trigger('click');
 		await flushPromises();
@@ -489,6 +552,7 @@ describe('SecuritySettings - 保存载荷', () => {
 			'allow_origin',
 			'comment_verify_block_automated',
 			'comment_verify_difficulty',
+			'comment_verify_domain_enabled',
 			'comment_verify_enabled',
 			'comment_verify_instr_enabled',
 			'comment_verify_log_challenge',

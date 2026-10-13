@@ -67,5 +67,26 @@
     { "name": "白名单条目带路径时按 origin 归一", "allowOrigin": "https://a.com/blog", "origin": "https://a.com", "referer": "", "postUrl": "", "want": "allow" },
     { "name": "白名单条目全部非法时 fail-closed（全部拒绝）", "allowOrigin": "https://", "origin": "https://a.com", "referer": "", "postUrl": "", "want": "deny:not_allowed" },
     { "name": "未配置白名单时即使 post_url 指向别处也不校验", "allowOrigin": "", "origin": "", "referer": "", "postUrl": "https://evil.example/x", "want": "skip" }
-  ]
+  ],
+  "lock": [
+    { "name": "未配置白名单时域名绑定 fail-closed（与上面的 skip 形成对照）", "allowOrigin": "", "origin": "https://a.com", "referer": "", "postUrl": "", "want": { "decision": "deny:no_whitelist", "origin": "https://a.com" } },
+    { "name": "allow_origin 只有空白时同样 fail-closed", "allowOrigin": "   ", "origin": "https://a.com", "referer": "", "postUrl": "", "want": { "decision": "deny:no_whitelist", "origin": "https://a.com" } },
+    { "name": "allow_origin 为 * 时不再等于放行，而是 fail-closed", "allowOrigin": "*", "origin": "https://a.com", "referer": "", "postUrl": "", "want": { "decision": "deny:no_whitelist", "origin": "https://a.com" } },
+    { "name": "白名单里混有 * 时同样 fail-closed", "allowOrigin": "https://a.com,*", "origin": "https://a.com", "referer": "", "postUrl": "", "want": { "decision": "deny:no_whitelist", "origin": "https://a.com" } },
+    { "name": "无任何来源时 fail-closed，且没有可绑定的域名", "allowOrigin": "https://a.com", "origin": "", "referer": "", "postUrl": "", "want": { "decision": "deny:no_source", "origin": "" } },
+    { "name": "Origin 命中白名单，绑定到该 source", "allowOrigin": "https://a.com", "origin": "https://a.com", "referer": "", "postUrl": "", "want": { "decision": "allow", "origin": "https://a.com" } },
+    { "name": "Origin 命中（大小写/尾斜杠/默认端口归一）", "allowOrigin": "HTTPS://A.com:443/", "origin": "https://a.com", "referer": "", "postUrl": "", "want": { "decision": "allow", "origin": "https://a.com" } },
+    { "name": "只有 Referer 时绑定 Referer 的来源", "allowOrigin": "https://a.com", "origin": "", "referer": "https://a.com/blog/x?y=1#f", "postUrl": "", "want": { "decision": "allow", "origin": "https://a.com" } },
+    { "name": "服务端转发：只有 post_url 命中时也能绑定", "allowOrigin": "https://a.com", "origin": "", "referer": "", "postUrl": "https://a.com/blog/x", "want": { "decision": "allow", "origin": "https://a.com" } },
+    { "name": "优先取 Origin：Origin 与 Referer 都命中时绑定 Origin", "allowOrigin": "https://a.com,https://www.a.com", "origin": "https://www.a.com", "referer": "https://a.com/blog/x", "postUrl": "", "want": { "decision": "allow", "origin": "https://www.a.com" } },
+    { "name": "裸主机名条目命中时绑定归一化后的完整来源（含非默认端口）", "allowOrigin": "a.com", "origin": "https://a.com:8443", "referer": "", "postUrl": "", "want": { "decision": "allow", "origin": "https://a.com:8443" } },
+    { "name": "不命中白名单：被拒但保留观测到的域名（用于排查）", "allowOrigin": "https://a.com", "origin": "https://evil.example", "referer": "", "postUrl": "", "want": { "decision": "deny:not_allowed", "origin": "https://evil.example" } },
+    { "name": "Origin 命中但 Referer 指向别处时拒绝（全部来源都必须命中）", "allowOrigin": "https://a.com", "origin": "https://a.com", "referer": "https://evil.example/x", "postUrl": "", "want": { "decision": "deny:not_allowed", "origin": "https://a.com" } },
+    { "name": "Origin 不可解析（null）时 fail-closed，且没有可绑定的域名", "allowOrigin": "https://a.com", "origin": "null", "referer": "", "postUrl": "https://a.com/x", "want": { "decision": "deny:invalid_source", "origin": "https://a.com" } },
+    { "name": "post_url 是相对路径时视为不可解析", "allowOrigin": "https://a.com", "origin": "", "referer": "", "postUrl": "/blog/x", "want": { "decision": "deny:invalid_source", "origin": "" } },
+    { "name": "白名单条目全部非法时 fail-closed", "allowOrigin": "https://", "origin": "https://a.com", "referer": "", "postUrl": "", "want": { "decision": "deny:not_allowed", "origin": "https://a.com" } },
+    { "name": "子域不匹配裸域条目（不支持通配子域）", "allowOrigin": "a.com", "origin": "https://www.a.com", "referer": "", "postUrl": "", "want": { "decision": "deny:not_allowed", "origin": "https://www.a.com" } },
+    { "name": "IPv6 字面量同样可绑定", "allowOrigin": "http://[::1]:17171", "origin": "http://[::1]:17171", "referer": "", "postUrl": "", "want": { "decision": "allow", "origin": "http://[::1]:17171" } }
+  ],
+  "_lockComment": "lock 段覆盖 comment_verify_domain_enabled 的判定口径（checkDomainLock）：与 decide 段共用同一套解析/白名单/来源规则，只有两点不同 —— 白名单不可用（空/空白/*）时不是 skip 而是 deny:no_whitelist（fail-closed），以及判定结果额外给出用于签进挑战/票据的归一化来源（origin）。被拒时也尽量保留观测到的来源，便于日志与认证记录定位。"
 }

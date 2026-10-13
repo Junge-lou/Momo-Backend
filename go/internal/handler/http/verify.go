@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"math"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 // VerifyChallengeRequest 签发挑战请求体
 type VerifyChallengeRequest struct {
 	PostSlug string `json:"post_slug"`
+	PostURL  string `json:"post_url"`
 }
 
 // VerifySolutionRequest 校验答案请求体（协议 v2）
@@ -30,6 +32,7 @@ type VerifySolutionRequest struct {
 	Nonces    json.RawMessage `json:"nonces"`
 	ElapsedMs json.RawMessage `json:"elapsed_ms"`
 	Hp        string          `json:"hp"`
+	PostURL   string          `json:"post_url"`
 	Instr     map[string]any  `json:"instr"`
 }
 
@@ -79,6 +82,10 @@ func sanitizePostSlug(raw string) string {
 }
 
 // VerifyChallenge 签发无感验证挑战 (POST /api/verify/challenge)
+//
+// 来源域名绑定（comment_verify_domain_enabled）：开启后本接口只接受来自
+// allow_origin 白名单站点的请求（白名单不可用时 fail-closed），并把来源哈希签进
+// 挑战载荷；未通过时返回 403 + reason: DOMAIN_NOT_ALLOWED，不签发任何挑战。
 func (h *CommentHandler) VerifyChallenge(c *gin.Context) {
 	var req VerifyChallengeRequest
 	// 无请求体也允许，仅用于探测开关状态
@@ -99,9 +106,29 @@ func (h *CommentHandler) VerifyChallenge(c *gin.Context) {
 	}
 
 	clientIP := utils.GetClientIP(c)
+
+	// 来源域名绑定：必须在签发挑战之前拒绝，白名单外的站点连挑战都不该拿到。
+	domain := utils.CheckVerifyDomain(c.GetHeader("Origin"), c.GetHeader("Referer"), req.PostURL)
+	if !domain.OK {
+		log.Printf("[security] 拒绝来源未授权的验证挑战签发: decision=%s origin=%q ip=%s", domain.Decision, domain.Origin, clientIP)
+		h.Repo.RecordVerifyEvent(c.Request.Context(), model.VerifyRecordInput{
+			Event:    model.VerifyEventFail,
+			Reason:   "domain:" + domain.Decision,
+			PostSlug: postSlug,
+			IP:       clientIP,
+			Origin:   domain.Origin,
+		})
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+			"reason":  "DOMAIN_NOT_ALLOWED",
+		})
+		return
+	}
+
 	// post_slug 必须传进挑战：它会被签进载荷，从而把这份挑战绑定到该文章，
 	// 避免一次工作量证明被拿去兑换任意文章的票据。
-	challenge, err := utils.CreateVerifyChallenge(clientIP, postSlug)
+	challenge, err := utils.CreateVerifyChallenge(clientIP, postSlug, domain.OrgHash)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,
@@ -119,6 +146,7 @@ func (h *CommentHandler) VerifyChallenge(c *gin.Context) {
 		Difficulty:  &difficulty,
 		PostSlug:    postSlug,
 		IP:          clientIP,
+		Origin:      domain.Origin,
 	})
 
 	c.JSON(http.StatusOK, gin.H{
@@ -139,6 +167,9 @@ func (h *CommentHandler) VerifyChallenge(c *gin.Context) {
 }
 
 // VerifySolution 校验无感验证答案并签发票据 (POST /api/verify/solution)
+//
+// 来源域名绑定：开启时先校验来源命中白名单（fail-closed），再用本次请求观测到的来源
+// 哈希与挑战载荷里的 org 比对；签出的票据同样带上 org，投评论时还要再比一次。
 func (h *CommentHandler) VerifySolution(c *gin.Context) {
 	if !utils.IsVerifyEnabled() {
 		c.JSON(http.StatusOK, gin.H{
@@ -175,6 +206,26 @@ func (h *CommentHandler) VerifySolution(c *gin.Context) {
 		IP:          clientIP,
 	}
 
+	// 来源域名绑定：必须在动手算力校验之前拒绝，白名单外的站点连挑战都不该拿到。
+	// 被拒时同样落一条 fail 记录，并把「哪个域名在试」记下来便于排查中转。
+	domain := utils.CheckVerifyDomain(c.GetHeader("Origin"), c.GetHeader("Referer"), req.PostURL)
+	if !domain.OK {
+		log.Printf("[security] 拒绝来源未授权的验证答案提交: decision=%s origin=%q ip=%s", domain.Decision, domain.Origin, clientIP)
+		recordBase.Event = model.VerifyEventFail
+		recordBase.Reason = "domain:" + domain.Decision
+		recordBase.Origin = domain.Origin
+		h.Repo.RecordVerifyEvent(c.Request.Context(), recordBase)
+
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+			"reason":  "DOMAIN_NOT_ALLOWED",
+		})
+		return
+	}
+	// 后续所有记录都带上本次观测到的来源（未开启域名绑定时为空串 => 落 NULL）
+	recordBase.Origin = domain.Origin
+
 	// 蜜罐字段被填写 => 认定为脚本，静默拒绝
 	if strings.TrimSpace(req.Hp) != "" {
 		recordBase.Event = model.VerifyEventFail
@@ -197,6 +248,7 @@ func (h *CommentHandler) VerifySolution(c *gin.Context) {
 		IP:        clientIP,
 		// 必须与签发挑战时的 post_slug 完全一致（挑战载荷里的 slug 由签名保护）
 		PostSlug: postSlug,
+		OrgHash:  domain.OrgHash,
 		Instr:    req.Instr,
 	})
 	if !ok {
@@ -212,7 +264,7 @@ func (h *CommentHandler) VerifySolution(c *gin.Context) {
 		return
 	}
 
-	ticket, err := utils.CreateVerifyTicket(clientIP, postSlug)
+	ticket, err := utils.CreateVerifyTicket(clientIP, postSlug, domain.OrgHash)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"code":    500,

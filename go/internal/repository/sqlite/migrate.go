@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"log"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -33,6 +34,14 @@ var migrations = []Migration{
 			        ELSE pub_date
 			      END
 			    WHERE typeof(pub_date) = 'text'`,
+		},
+	},
+	{
+		ID:          "0002_verify_record_origin",
+		Description: "VerifyRecord 增加 origin 列（来源域名绑定：记录解题/被拒的来源域名）",
+		// 纯新增列，旧行为 NULL；新库由 InitSchema 的建表 DDL 直接建出该列
+		Statements: []string{
+			`ALTER TABLE VerifyRecord ADD COLUMN origin TEXT`,
 		},
 	},
 }
@@ -76,6 +85,10 @@ func RunMigrations(db *sqlx.DB) error {
 }
 
 // applyMigration 在单个事务内执行迁移语句并写入记录：要么全部生效，要么全部回滚。
+//
+// 「补列」类迁移（ALTER TABLE ... ADD COLUMN）在新库上必然撞上 duplicate column name
+// —— 建表 DDL 已经把列建出来了。那说明目标状态已经达成，按已应用处理，否则每次
+// 启动都会重复报错（Node 端的 0002 迁移是同样的姿态）。
 func applyMigration(db *sqlx.DB, m Migration) error {
 	tx, err := db.Beginx()
 	if err != nil {
@@ -85,6 +98,9 @@ func applyMigration(db *sqlx.DB, m Migration) error {
 
 	for _, stmt := range m.Statements {
 		if _, err := tx.Exec(stmt); err != nil {
+			if isDuplicateColumnError(err) {
+				continue
+			}
 			return err
 		}
 	}
@@ -95,4 +111,12 @@ func applyMigration(db *sqlx.DB, m Migration) error {
 	}
 
 	return tx.Commit()
+}
+
+// isDuplicateColumnError 判断错误是否为「列已存在」（SQLite: duplicate column name: X）
+func isDuplicateColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
 }

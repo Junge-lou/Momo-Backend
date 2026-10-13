@@ -89,6 +89,7 @@
 | `comment_verify_secret` | 无感验证签名密钥，首次启用时自动生成（敏感字段，不对外读写） |
 | `comment_verify_instr_enabled` | 是否启用第二层环境质询（Instrumentation），默认关闭。开启后挑战会下发一段随机程序，要求访客浏览器真实执行并回传环境特征 |
 | `comment_verify_block_automated` | 第二层命中自动化特征（webdriver、HeadlessChrome、无布局引擎等）时是否直接拒绝，默认关闭（只写日志、不拦截） |
+| `comment_verify_domain_enabled` | 是否启用**来源域名绑定**，默认关闭。开启后挑战签发、答案兑换与评论提交三处都要求请求来源命中 `allow_origin` 白名单，并把来源域名哈希签进挑战与票据。**白名单为空或含 `*` 时 fail-closed**（一律拒绝），与只作用于写接口的普通来源校验不同 |
 | `comment_verify_retention_days` | 认证记录（`VerifyRecord`）保留天数，默认 `30`；`0` 或负数表示永久保留，上限 3650。超期记录由三端的惰性清理自动删除 |
 | `comment_verify_log_challenge` | 是否记录「签发挑战」事件（`VerifyRecord.event = 'challenge'`），默认记录（非 `"false"` 即记录）。关闭后只记录通过/失败，可显著降低写入量 |
 | `password_changed` | 是否已修改默认密码 |
@@ -133,12 +134,13 @@
 | `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 自增 ID |
 | `created_at` | INTEGER | NOT NULL | 事件时间（**Unix 毫秒整数**，与 `Comment.pub_date` 口径一致） |
 | `event` | TEXT | NOT NULL | `challenge` 签发 / `pass` 校验通过 / `fail` 校验失败 |
-| `reason` | TEXT | — | 失败原因（`honeypot` / `bad signature` / `ip mismatch` / `challenge already used` / `PROTOCOL_OUTDATED` 等），非失败事件为 NULL |
+| `reason` | TEXT | — | 失败原因（`honeypot` / `bad signature` / `ip mismatch` / `challenge already used` / `PROTOCOL_OUTDATED` / `domain mismatch` / `domain required` / `domain:deny:*` 等），非失败事件为 NULL |
 | `elapsed_ms` | INTEGER | — | 客户端上报的求解耗时（仅 `pass` / `fail` 有） |
 | `difficulty` | INTEGER | — | 本次生效的**总期望哈希次数**（不是响应里 `pow.d` 的单子挑战难度） |
 | `challenge_id` | TEXT | — | 挑战 cid；签名校验或载荷解析就失败时为 NULL（此时无法安全取出 cid） |
 | `post_slug` | TEXT | — | 关联的文章标识 |
 | `ip_address` | TEXT | — | 访客完整 IP（仅管理后台可见，按保留天数自动清理） |
+| `origin` | TEXT | — | 归一化后的**来源域名**（如 `https://blog.example.com`）。仅在 `comment_verify_domain_enabled` 开启时有值；**被域名校验拒绝的请求同样记录**（正是「哪个域名在尝试」的线索）。空值一律落 NULL |
 | `country` | TEXT | — | **仅 Cloudflare Worker 部署有值**（`cf.country`，ISO 二字码） |
 | `network` | TEXT | — | **仅 Cloudflare Worker 部署有值**（`cf.asOrganization`，运营商名称） |
 | `asn` | INTEGER | — | **仅 Cloudflare Worker 部署有值**（`cf.asn`） |
@@ -156,6 +158,11 @@
 > Worker 见 `worker/schemas/comment.sql` 与启动自迁移 `0002_verify_record_table`
 > （`worker/src/utils/migrations.ts`）。三者都是 `CREATE TABLE IF NOT EXISTS`，
 > 已有部署重启（Node/Go）或下次请求（Worker）即自动补表。
+>
+> **`origin` 列是后加的**（来源域名绑定）：三端各有一条补列迁移
+> （Node `0002_verify_record_origin`、Worker 同批版本化迁移、Go 的启动自迁移），
+> 对旧库执行 `ALTER TABLE ... ADD COLUMN "origin" TEXT`；新库由建表 DDL 直接带上该列，
+> 此时补列迁移会撞上 `duplicate column name`，按「已应用」处理（见 Node 的迁移执行器）。
 
 ### 统计口径
 

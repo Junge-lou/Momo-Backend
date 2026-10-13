@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { api } from '../helpers/http';
 import { createSchema, getComment, getVerification, lastCommentId, seedComment, seedSettings, testEnv } from '../helpers/db';
 import { resetSentMails, sentMails } from '../stubs/nodemailer';
-import { createTicket } from '../../src/utils/verify';
+import { createTicket, checkVerifyDomain } from '../../src/utils/verify';
 import {
 	MAX_AUTHOR,
 	MAX_CONTENT,
@@ -965,6 +965,135 @@ describe('POST /api/comments —— 服务端来源校验', () => {
 
 		// 白名单内来源：此时才会走到限流，应命中 60 秒冷却
 		const throttled = await postComment({}, ip, { Origin: 'https://blog.example.com' });
+		expect(throttled.status).toBe(429);
+	});
+});
+
+/**
+ * 来源域名绑定（comment_verify_domain_enabled）：挑战 → 票据 → 评论提交 是同一条域名链。
+ *
+ * 与上面的普通来源校验的区别：
+ *  - `allow_origin` 未配置或为 `*` 时 **不跳过**，而是 fail-closed；
+ *  - 票据里的 org 必须与本次请求的来源一致，否则即使票据本身有效也要拒绝。
+ */
+describe('POST /api/comments —— 来源域名绑定', () => {
+	const ORIGIN_A = 'https://blog.example.com';
+	const ORIGIN_B = 'https://www.example.com';
+	const EVIL = 'https://luoxuedev.top';
+
+	/** 用应用自己的口径算出某个来源的 orgHash（密钥是模块级缓存，测试里无法自行复算） */
+	async function orgHashOf(origin: string): Promise<string> {
+		return (await checkVerifyDomain(testEnv, { origin })).orgHash;
+	}
+
+	it('关闭域名绑定时不看来源（与旧行为一致）', async () => {
+		await seedSettings({ ...SMTP, comment_verify_enabled: 'false', allow_origin: '' });
+
+		const res = await postComment({}, '203.0.113.150', { Origin: 'https://anywhere.example' });
+		expect(res.status).toBe(200);
+		expect(await lastCommentId()).not.toBeNull();
+	});
+
+	it('开启但白名单未配置：403 DOMAIN_NOT_ALLOWED，不落库、不发信', async () => {
+		await seedSettings({
+			...SMTP,
+			comment_verify_domain_enabled: 'true',
+			comment_verify_enabled: 'true',
+		});
+
+		const res = await postComment({}, '203.0.113.151', { Origin: ORIGIN_A });
+
+		expect(res.status).toBe(403);
+		expect(res.body.reason).toBe('DOMAIN_NOT_ALLOWED');
+		expect(await lastCommentId()).toBeNull();
+		expect(sentMails).toHaveLength(0);
+	});
+
+	it('开启且 allow_origin=* ：同样 fail-closed（普通来源校验在这里会放行）', async () => {
+		await seedSettings({
+			...SMTP,
+			comment_verify_domain_enabled: 'true',
+			allow_origin: '*',
+		});
+
+		const res = await postComment({}, '203.0.113.152', { Origin: ORIGIN_A });
+
+		expect(res.status).toBe(403);
+		expect(res.body.reason).toBe('DOMAIN_NOT_ALLOWED');
+		expect(await lastCommentId()).toBeNull();
+	});
+
+	it('同域票据 + 同域请求：正常落库', async () => {
+		await seedSettings({
+			...SMTP,
+			comment_verify_enabled: 'true',
+			comment_verify_domain_enabled: 'true',
+			allow_origin: `${ORIGIN_A},${ORIGIN_B}`,
+		});
+
+		const ip = '203.0.113.153';
+		const ticket = await createTicket(testEnv, ip, SLUG, await orgHashOf(ORIGIN_A));
+		const res = await postComment({ verify_ticket: ticket }, ip, { Origin: ORIGIN_A });
+
+		expect(res.status).toBe(200);
+		expect(await lastCommentId()).not.toBeNull();
+	});
+
+	it('票据来自另一个（同样在白名单内的）域名时拒绝为 VERIFY_REQUIRED', async () => {
+		await seedSettings({
+			...SMTP,
+			comment_verify_enabled: 'true',
+			comment_verify_domain_enabled: 'true',
+			allow_origin: `${ORIGIN_A},${ORIGIN_B}`,
+		});
+
+		const ip = '203.0.113.154';
+		const ticket = await createTicket(testEnv, ip, SLUG, await orgHashOf(ORIGIN_B));
+		const res = await postComment({ verify_ticket: ticket }, ip, { Origin: ORIGIN_A });
+
+		expect(res.status).toBe(403);
+		expect(res.body.reason).toBe('VERIFY_REQUIRED');
+		expect(await lastCommentId()).toBeNull();
+	});
+
+	it('白名单外的域名即使带有效票据也被拒（连票据都不该用）', async () => {
+		await seedSettings({
+			...SMTP,
+			comment_verify_enabled: 'true',
+			comment_verify_domain_enabled: 'true',
+			allow_origin: ORIGIN_A,
+		});
+
+		const ip = '203.0.113.155';
+		const ticket = await createTicket(testEnv, ip, SLUG, await orgHashOf(EVIL));
+		const res = await postComment({ verify_ticket: ticket }, ip, {
+			Origin: EVIL,
+			Referer: `${EVIL}/blog/aosp`,
+		});
+
+		expect(res.status).toBe(403);
+		expect(res.body.reason).toBe('DOMAIN_NOT_ALLOWED');
+		expect(await lastCommentId()).toBeNull();
+		expect(sentMails).toHaveLength(0);
+	});
+
+	it('域名校验早于限流：冷却期内的白名单外请求返回 403 而不是 429', async () => {
+		await seedSettings({
+			...SMTP,
+			comment_verify_enabled: 'true',
+			comment_verify_domain_enabled: 'true',
+			allow_origin: ORIGIN_A,
+		});
+
+		const ip = '203.0.113.156';
+		await seedComment({ ip_address: ip, pub_date: Date.now() });
+
+		const denied = await postComment({}, ip, { Origin: 'https://evil.example' });
+		expect(denied.status).toBe(403);
+		expect(denied.body.reason).toBe('DOMAIN_NOT_ALLOWED');
+
+		// 白名单内来源才会走到限流，命中 60 秒冷却
+		const throttled = await postComment({}, ip, { Origin: ORIGIN_A });
 		expect(throttled.status).toBe(429);
 	});
 });

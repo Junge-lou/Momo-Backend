@@ -9,6 +9,7 @@
  * 口径约定（与 Node.js / Go 完全一致）：
  * - base64url 一律无填充
  * - IP 哈希：hex(SHA256("ip:" + secret + ":" + ip)) 取前 16 位
+ * - 来源域名哈希：hex(SHA256("org:" + secret + ":" + 归一化来源)) 取前 16 位
  * - 蜜罐字段名："v_" + hex(SHA256("hp:" + secret + ":" + slug)) 取前 10 位
  * - 签名：base64url(HMAC-SHA256(data, secret))
  *
@@ -81,6 +82,16 @@ export function timingSafeEqual(a: string, b: string): boolean {
 /** IP 加盐哈希，避免明文留存 IP */
 export async function hashVerifyIp(ip: string, secret: string): Promise<string> {
   return (await sha256Hex(`ip:${secret}:${ip}`)).slice(0, 16);
+}
+
+/**
+ * 来源域名加盐哈希，把挑战/票据绑定到签发它的站点域名。
+ *
+ * 与 hashVerifyIp 同构：SHA256("org:" + secret + ":" + 归一化来源) 取前 16 位十六进制。
+ * 三端必须完全一致（doc/vectors/verify-v2.json 的 originHash）。
+ */
+export async function hashVerifyOrigin(origin: string, secret: string): Promise<string> {
+  return (await sha256Hex(`org:${secret}:${origin}`)).slice(0, 16);
 }
 
 /** 按文章派生的蜜罐字段名 */

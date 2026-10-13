@@ -15,6 +15,11 @@
  *
  * 注意：Origin / Referer / post_url 都是请求方可伪造的字段，这道校验抬高的是
  * 「直接 fork 前端 + 服务器转发」的成本，不是密码学边界；真正的边界需要站点级令牌。
+ *
+ * 同一份口径还被无感验证复用：`comment_verify_domain_enabled` 开启时，挑战签发、
+ * 答案兑换与评论提交三处都要求来源命中白名单（`checkDomainLock`），并把来源哈希签进
+ * 挑战与票据，见 doc/api.md 的「来源域名绑定」。差别只有一处：白名单不可用时
+ * 普通来源校验会 `skip`，而域名绑定 **fail-closed**。
  */
 
 /** 来源校验的判定结果（三端必须逐字一致，见 doc/vectors/origin-v1.json 的 decisions） */
@@ -242,4 +247,76 @@ export function checkRequestSource(params: RequestSourceInput): OriginDecision {
 /** 该判定是否应当直接拒绝请求（三个后端统一调用，避免各自写反） */
 export function isSourceDenied(decision: OriginDecision): boolean {
   return decision !== ORIGIN_DECISION.SKIP && decision !== ORIGIN_DECISION.ALLOW;
+}
+
+/* ------------------------------------------------------------------ *
+ * 无感验证的「来源域名绑定」（comment_verify_domain_enabled）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 域名绑定的判定码。
+ *
+ * 比 `checkRequestSource` 多一个 `deny:no_whitelist`：普通来源校验在
+ * `allow_origin` 未配置或为 `*` 时会 `skip`（放行），而域名绑定要求**必须**有一份
+ * 可用白名单 —— 否则「开启域名校验」等于空转，这正是要拦住的形态（CORS 放开 `*`
+ * 的站点过去完全没有来源约束）。因此这里 fail-closed。
+ */
+export const DOMAIN_LOCK_DECISION = {
+  /** 未开启域名绑定（设置项关闭时由调用方直接短路，不会走到这里） */
+  DISABLED: 'disabled',
+  /** 通过 */
+  ALLOW: 'allow',
+  /** 没有可用的白名单（allow_origin 为空、只有空白、或含 `*`） */
+  DENY_NO_WHITELIST: 'deny:no_whitelist',
+} as const;
+
+export interface DomainLockResult {
+  ok: boolean;
+  /** `ALLOW` 或 `deny:*`，用于日志 / 认证记录的 reason 与向量断言 */
+  decision: string;
+  /** 归一化后的来源（判定通过时必有值；被拒时尽量给出，便于排查是哪个域名在试） */
+  origin: string;
+}
+
+/**
+ * 选出「本次请求代表的来源」，优先级 Origin → Referer → post_url。
+ *
+ * 三者都必须命中白名单（由 checkRequestSource 保证），这里只是挑一个用于绑定与记录：
+ * 浏览器直连时 Origin 最准；服务端转发或极少数不发送 Origin 的客户端退到 Referer / post_url。
+ */
+export function pickBoundOrigin(params: RequestSourceInput): ParsedOrigin | null {
+  for (const value of [params.origin, params.referer, params.postUrl]) {
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const parsed = parseOriginLike(value);
+    if (parsed && CANDIDATE_SCHEMES.includes(parsed.scheme)) return parsed;
+  }
+  return null;
+}
+
+/**
+ * 判定一次请求是否满足「来源域名绑定」。
+ *
+ * 规则（三端一致）：
+ * 1. 白名单不可用（模式不是 list）→ deny:no_whitelist（fail-closed）；
+ * 2. 其余复用 `checkRequestSource`：任一来源不可解析 → deny:invalid_source；
+ *    无来源 → deny:no_source；任一来源不命中 → deny:not_allowed；
+ * 3. 全部命中 → allow，并给出用于绑定的归一化来源。
+ *
+ * 被拒时同样尽量给出归一化来源（能解析出来就有值）：它正是「哪个域名在尝试」的线索，
+ * 会被写进认证记录与日志，因此不能因为判定失败就丢掉。
+ */
+export function checkDomainLock(params: RequestSourceInput): DomainLockResult {
+  const observed = pickBoundOrigin(params);
+  const origin = observed ? observed.origin : '';
+
+  const { mode } = parseAllowedOrigins(params.allowOrigin);
+  if (mode !== 'list') {
+    return { ok: false, decision: DOMAIN_LOCK_DECISION.DENY_NO_WHITELIST, origin };
+  }
+
+  const decision = checkRequestSource(params);
+  if (isSourceDenied(decision)) return { ok: false, decision, origin };
+  if (!origin) return { ok: false, decision: ORIGIN_DECISION.DENY_NO_SOURCE, origin: '' };
+
+  return { ok: true, decision: ORIGIN_DECISION.ALLOW, origin };
 }

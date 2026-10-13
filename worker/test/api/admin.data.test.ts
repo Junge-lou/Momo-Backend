@@ -51,6 +51,23 @@ describe('GET /admin/data/export/settings', () => {
 		const res = await api('/admin/data/export/settings', { headers: authed() });
 		expect(res.body.data.settings.email_enabled).toBe('true');
 	});
+
+	it('comment_verify_domain_enabled 在导出白名单内（导出 → 导入往返一致）', async () => {
+		await seedSettings({ comment_verify_domain_enabled: 'true' });
+		const exported = (await api('/admin/data/export/settings', { headers: authed() })).body.data
+			.settings as Record<string, string>;
+		expect(exported.comment_verify_domain_enabled).toBe('true');
+
+		// 清掉后从导出内容导回，值必须复原（否则备份会静默丢掉域名绑定开关）
+		await testEnv.MOMO_DB.prepare("DELETE FROM Settings WHERE key = 'comment_verify_domain_enabled'").run();
+		const imported = await api('/admin/data/import/settings', {
+			method: 'POST',
+			headers: authed(),
+			body: exported,
+		});
+		expect(imported.body.data.updated).toContain('comment_verify_domain_enabled');
+		expect((await rawSettings()).comment_verify_domain_enabled).toBe('true');
+	});
 });
 
 describe('GET /admin/data/export/comments', () => {
@@ -328,6 +345,17 @@ describe('POST /admin/data/import/settings', () => {
 		const res = await importSettings({ secret_key: 'x', site_name: 'Momo' });
 		expect(res.body.data.updated).toEqual(['site_name']);
 		expect(await rawSettings()).not.toHaveProperty('secret_key');
+	});
+
+	it('comment_verify_domain_enabled 在导入白名单内（与导出/设置项白名单三端一致）', async () => {
+		const res = await importSettings({ comment_verify_domain_enabled: 'true' });
+		expect(res.status).toBe(200);
+		expect(res.body.data.updated).toEqual(['comment_verify_domain_enabled']);
+		expect((await rawSettings()).comment_verify_domain_enabled).toBe('true');
+
+		const off = await importSettings({ comment_verify_domain_enabled: 'false' });
+		expect(off.body.data.updated).toEqual(['comment_verify_domain_enabled']);
+		expect((await rawSettings()).comment_verify_domain_enabled).toBe('false');
 	});
 
 	it('敏感字段为空串时表示「不修改」，不覆盖已有值', async () => {

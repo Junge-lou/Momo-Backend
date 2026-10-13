@@ -23,7 +23,7 @@
         <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <i class="fa-solid fa-earth-americas text-orange-500"></i> 跨域设置 (CORS)
         </h2>
-        <p class="text-sm text-gray-500 mb-4">设置允许调用 API 的来源白名单，多个域名用逗号分隔。白名单同时用于 CORS 响应头与<b>提交评论的服务端来源校验</b>：白名单外的站点提交评论会被 403 拒绝（不落库、不发信）。留空表示不放开跨域、也不启用该校验；填 <code>*</code> 表示允许任意来源。</p>
+        <p class="text-sm text-gray-500 mb-4">设置允许调用 API 的来源白名单，多个域名用逗号分隔。白名单同时用于 CORS 响应头、<b>提交评论的服务端来源校验</b>与<b>无感验证的来源域名绑定</b>：白名单外的站点提交评论会被 403 拒绝（不落库、不发信）。留空表示不放开跨域、也不启用提交评论的来源校验；填 <code>*</code> 表示允许任意来源（注意：开启「来源域名绑定」后 <code>*</code> 会被视为没有可用白名单）。</p>
         <div class="flex flex-wrap gap-2 mb-2 min-h-[28px]">
           <span v-for="(origin, index) in originList" :key="index"
             class="inline-flex items-center gap-1 px-3 py-1 bg-orange-50 border border-orange-200 text-orange-700 rounded-full text-sm">
@@ -184,6 +184,37 @@
             </div>
           </div>
 
+          <!-- 来源域名绑定：复用「跨域设置」的白名单，把挑战/票据绑定到签发它的域名 -->
+          <div v-if="commentVerifyEnabled" class="border-t border-gray-100 pt-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm font-medium text-gray-700">启用来源域名绑定</p>
+                <p class="text-xs text-gray-400 mt-1">
+                  要求挑战签发、答案兑换与评论提交三处都来自白名单内的域名，并把来源域名签进挑战与票据。
+                  这样「把组件搬到别的站点、或用自己的服务器转发请求」就拿不到凭证：为 A 域名签发的挑战无法在 B 域名兑换。
+                  默认关闭。注意来源头（Origin/Referer）本身是可伪造的，这道闸门抬高的是滥用成本、不是密码学边界。
+                </p>
+              </div>
+              <label class="relative shrink-0 ms-4 inline-flex items-center cursor-pointer">
+                <input type="checkbox" v-model="commentVerifyDomainEnabled" class="sr-only peer">
+                <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                <span class="ms-3 text-sm font-medium whitespace-nowrap text-gray-700">
+                  {{ commentVerifyDomainEnabled ? '已启用' : '已禁用' }}
+                </span>
+              </label>
+            </div>
+
+            <p v-if="commentVerifyDomainEnabled && !domainWhitelistUsable"
+              class="text-xs text-red-500 bg-red-50 border border-red-200 rounded p-2">
+              当前「跨域设置」白名单为空或包含 <code>*</code>，域名绑定需要一份具体域名白名单，
+              此时会<strong>拒绝所有</strong>验证请求（fail-closed：挑战返回 403，评论也无法提交）。
+              请先在上方添加至少一个域名。
+            </p>
+            <p v-else-if="commentVerifyDomainEnabled" class="text-xs text-gray-400">
+              生效中的白名单：{{ originList.join('、') }}
+            </p>
+          </div>
+
           <!-- 认证记录（保留策略）：数据在「认证记录」页展示，见 router 的 /verify-records -->
           <div v-if="commentVerifyEnabled" class="border-t border-gray-100 pt-4 space-y-4">
             <div class="flex items-center justify-between">
@@ -319,6 +350,8 @@ const commentVerifyDifficulty = ref('1000000')
 const commentVerifyInstrEnabled = ref(false)
 // 命中自动化特征时是否拒绝：默认关闭，只记录日志
 const commentVerifyBlockAutomated = ref(false)
+// 来源域名绑定（复用 allow_origin 白名单）：默认关闭；白名单不可用时 fail-closed
+const commentVerifyDomainEnabled = ref(false)
 // 认证记录：是否记录「签发挑战」事件（默认记录）与保留天数（0 = 永久保留）
 const commentVerifyLogChallenge = ref(true)
 const commentVerifyRetentionDays = ref(30)
@@ -349,6 +382,14 @@ const trustProxyOverrideHint = computed(() => {
 
 const originList = ref([])
 const newOrigin = ref('')
+
+/**
+ * 白名单是否可用于域名绑定：必须非空且不含 `*`。
+ * 不满足时后端会 fail-closed（挑战与评论全部 403），所以面板要显式告警。
+ */
+const domainWhitelistUsable = computed(
+  () => originList.value.length > 0 && !originList.value.includes('*')
+)
 
 const addOrigin = () => {
   const val = newOrigin.value.trim()
@@ -399,12 +440,13 @@ const takeSnapshot = () => JSON.stringify({
   verifyDifficulty: commentVerifyDifficulty.value,
   verifyInstrEnabled: commentVerifyInstrEnabled.value,
   verifyBlockAutomated: commentVerifyBlockAutomated.value,
+  verifyDomainEnabled: commentVerifyDomainEnabled.value,
   verifyLogChallenge: commentVerifyLogChallenge.value,
   verifyRetentionDays: commentVerifyRetentionDays.value,
   trustProxy: trustProxy.value,
 })
 
-watch([ipBlacklist, emailBlacklist, originList, adminCommentKey, adminCommentKeyEnabled, commentVerifyEnabled, commentVerifyDifficulty, commentVerifyInstrEnabled, commentVerifyBlockAutomated, commentVerifyLogChallenge, commentVerifyRetentionDays, trustProxy], () => {
+watch([ipBlacklist, emailBlacklist, originList, adminCommentKey, adminCommentKeyEnabled, commentVerifyEnabled, commentVerifyDifficulty, commentVerifyInstrEnabled, commentVerifyBlockAutomated, commentVerifyDomainEnabled, commentVerifyLogChallenge, commentVerifyRetentionDays, trustProxy], () => {
   isDirty.value = takeSnapshot() !== initialSnapshot
 }, { deep: true })
 
@@ -435,6 +477,7 @@ const loadSettings = async () => {
       commentVerifyDifficulty.value = res.data.comment_verify_difficulty || '1000000'
       commentVerifyInstrEnabled.value = res.data.comment_verify_instr_enabled === 'true'
       commentVerifyBlockAutomated.value = res.data.comment_verify_block_automated === 'true'
+      commentVerifyDomainEnabled.value = res.data.comment_verify_domain_enabled === 'true'
       // 默认记录签发事件（后端默认值也是「非 false 即记录」）
       commentVerifyLogChallenge.value = res.data.comment_verify_log_challenge !== 'false'
       const retention = parseInt(res.data.comment_verify_retention_days ?? '30', 10)
@@ -481,6 +524,7 @@ const saveSettings = async () => {
       comment_verify_difficulty: commentVerifyDifficulty.value,
       comment_verify_instr_enabled: commentVerifyInstrEnabled.value ? 'true' : 'false',
       comment_verify_block_automated: commentVerifyBlockAutomated.value ? 'true' : 'false',
+      comment_verify_domain_enabled: commentVerifyDomainEnabled.value ? 'true' : 'false',
       comment_verify_log_challenge: commentVerifyLogChallenge.value ? 'true' : 'false',
       comment_verify_retention_days: String(normalizedRetentionDays.value),
       trust_proxy: trustProxy.value ? 'true' : 'false',

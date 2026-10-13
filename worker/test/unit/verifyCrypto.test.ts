@@ -14,6 +14,7 @@ import {
 	base64urlBytes,
 	fromBase64url,
 	hashVerifyIp,
+	hashVerifyOrigin,
 	hmacSHA256,
 	honeypotFieldName,
 	sha256Bytes,
@@ -29,6 +30,9 @@ const VECTOR_IP = '::ffff:127.0.0.1';
 const VECTOR_SLUG = '/posts/vector-check';
 const VECTOR_IP_HASH = '20fa49e706f48b01';
 const VECTOR_HONEYPOT = 'v_77dc2477f6';
+/** 与 doc/vectors/verify-v2.json 的 origin / originHash 一致（域名绑定口径） */
+const VECTOR_ORIGIN = 'https://blog.example.com';
+const VECTOR_ORIGIN_HASH = '6cfad5b1b7dc5e8e';
 
 describe('verifyCrypto —— base64url 编解码', () => {
 	it('编码结果不含填充，且使用 URL 安全字符', () => {

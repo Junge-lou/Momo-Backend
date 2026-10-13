@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
+import crypto from "node:crypto";
 import { sql } from "drizzle-orm";
 import router from "../src/middleware/routes";
 import { db } from "../src/orm/client";
 import { setSetting } from "../src/utils/settings";
+import { hashIp, hashOrigin } from "../src/utils/verify";
 import {
   api,
   json,
@@ -51,7 +53,42 @@ const TOUCHED_SETTINGS = [
   "site_name",
   "verify_base_url",
   "allow_origin",
+  "comment_verify_domain_enabled",
 ];
+
+/**
+ * 固定签名密钥（协议 v2）：本文件需要本地伪造票据来验证「票据与来源必须同域」。
+ *
+ * 与 api.verify.test.ts 同样的注意事项：getSecret() 有模块级缓存且只读库一次，
+ * 因此在 beforeAll 里写入，并**不**把它放进 TOUCHED_SETTINGS（否则会被清掉）。
+ */
+const VECTOR_SECRET = "a1b2c3d4e5f60718293a4b5c6d7e8f901a2b3c4d5e6f708192a3b4c5d6e7f801";
+
+function b64url(input: string | Buffer): string {
+  const buf = typeof input === "string" ? Buffer.from(input, "utf8") : input;
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** 本地签一张 v2 票据（origin 为空时对应「未开启域名绑定」的旧形状） */
+function localTicket(ip: string, slug: string, origin?: string): string {
+  const now = Date.now();
+  const payload: Record<string, unknown> = {
+    v: 2,
+    iph: hashIp(ip, VECTOR_SECRET),
+    slug,
+    iat: now,
+    exp: now + 300000,
+    jti: "dGVzdC1qdGk",
+  };
+  if (origin) payload.org = hashOrigin(origin, VECTOR_SECRET);
+  const body = b64url(JSON.stringify(payload));
+  return `${body}.${b64url(crypto.createHmac("sha256", VECTOR_SECRET).update(body, "utf8").digest())}`;
+}
+
+beforeAll(async () => {
+  // 必须早于任何触发 getSecret() 的调用（密钥只读库一次）
+  await setSetting("comment_verify_secret", VECTOR_SECRET);
+});
 
 function validBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -1072,6 +1109,149 @@ describe("POST /api/comments — 服务端来源校验", () => {
     const throttled = await postComment(validBody({ post_slug: "/posts/origin-throttle" }), ip, {
       origin: "https://blog.example.com",
     });
+    expect(throttled.status).toBe(429);
+  });
+});
+
+/**
+ * 来源域名绑定（comment_verify_domain_enabled）：挑战 → 票据 → 评论提交 是同一条域名链。
+ *
+ * 与上面的普通来源校验的区别：
+ *  - `allow_origin` 未配置或为 `*` 时 **不跳过**，而是 fail-closed；
+ *  - 票据里的 org 必须与本次请求的来源一致，否则即使票据本身有效也要拒绝。
+ */
+describe("POST /api/comments — 来源域名绑定", () => {
+  const ORIGIN_A = "https://blog.example.com";
+  const ORIGIN_B = "https://www.example.com";
+
+  const countOf = (slug: string) =>
+    (db.get(sql`SELECT COUNT(*) as count FROM "Comment" WHERE "post_slug" = ${slug}`) as any).count;
+
+  let smtp: FakeSmtp;
+
+  beforeAll(async () => {
+    smtp = await startFakeSmtp();
+  });
+
+  afterAll(async () => {
+    await smtp.close();
+  });
+
+  beforeEach(async () => {
+    await setSetting("smtp_host", "127.0.0.1");
+    await setSetting("smtp_port", String(smtp.port));
+    await setSetting("email_user", "sender@example.com");
+    await setSetting("email_password", "p");
+    await setSetting("email_secure", "false");
+    await setSetting("email_enabled", "true");
+    await setSetting("admin_email", "admin@example.com");
+    await setSetting("comment_verify_enabled", "true");
+    await setSetting("comment_verify_domain_enabled", "true");
+    await setSetting("allow_origin", `${ORIGIN_A},${ORIGIN_B}`);
+    smtp.reset();
+  });
+
+  it("关闭域名绑定时不看来源（与旧行为一致）", async () => {
+    await setSetting("comment_verify_domain_enabled", "false");
+    await setSetting("allow_origin", "");
+    // 连无感验证一起关掉，单独观察域名校验的开关语义
+    await setSetting("comment_verify_enabled", "false");
+
+    const res = await postComment(validBody({ post_slug: "/posts/lock-comment-off" }), uniqueIp(), {
+      origin: "https://anywhere.example",
+    });
+    expect(res.status).toBe(200);
+    expect(countOf("/posts/lock-comment-off")).toBe(1);
+  });
+
+  it("开启但白名单未配置：403 DOMAIN_NOT_ALLOWED，不落库、不发信", async () => {
+    await setSetting("allow_origin", "");
+
+    const res = await postComment(validBody({ post_slug: "/posts/lock-comment-nwl" }), uniqueIp(), {
+      origin: ORIGIN_A,
+    });
+
+    expect(res.status).toBe(403);
+    expect((await json(res)).reason).toBe("DOMAIN_NOT_ALLOWED");
+    expect(countOf("/posts/lock-comment-nwl")).toBe(0);
+    expect(smtp.messages).toHaveLength(0);
+  });
+
+  it("开启且 allow_origin=* ：同样 fail-closed（普通来源校验在这里会放行）", async () => {
+    await setSetting("allow_origin", "*");
+
+    const res = await postComment(validBody({ post_slug: "/posts/lock-comment-star" }), uniqueIp(), {
+      origin: ORIGIN_A,
+    });
+
+    expect(res.status).toBe(403);
+    expect((await json(res)).reason).toBe("DOMAIN_NOT_ALLOWED");
+    expect(countOf("/posts/lock-comment-star")).toBe(0);
+  });
+
+  it("同域票据 + 同域请求：正常落库", async () => {
+    const ip = uniqueIp();
+    const slug = "/posts/lock-comment-ok";
+
+    const res = await postComment(
+      validBody({ post_slug: slug, verify_ticket: localTicket(ip, slug, ORIGIN_A) }),
+      ip,
+      { origin: ORIGIN_A }
+    );
+
+    expect(res.status).toBe(200);
+    expect(countOf(slug)).toBe(1);
+  });
+
+  it("票据来自另一个（同样在白名单内的）域名时拒绝为 VERIFY_REQUIRED", async () => {
+    const ip = uniqueIp();
+    const slug = "/posts/lock-comment-cross";
+
+    const res = await postComment(
+      validBody({ post_slug: slug, verify_ticket: localTicket(ip, slug, ORIGIN_B) }),
+      ip,
+      { origin: ORIGIN_A }
+    );
+
+    expect(res.status).toBe(403);
+    expect((await json(res)).reason).toBe("VERIFY_REQUIRED");
+    expect(countOf(slug)).toBe(0);
+  });
+
+  it("白名单外的域名即使带有效票据也被拒（连票据都不该用）", async () => {
+    const ip = uniqueIp();
+    const slug = "/posts/lock-comment-evil";
+
+    const res = await postComment(
+      validBody({ post_slug: slug, verify_ticket: localTicket(ip, slug, "https://luoxuedev.top") }),
+      ip,
+      { origin: "https://luoxuedev.top", referer: "https://luoxuedev.top/blog/aosp" }
+    );
+
+    expect(res.status).toBe(403);
+    expect((await json(res)).reason).toBe("DOMAIN_NOT_ALLOWED");
+    expect(countOf(slug)).toBe(0);
+    expect(smtp.messages).toHaveLength(0);
+  });
+
+  it("域名校验早于限流：冷却期内的白名单外请求返回 403 而不是 429", async () => {
+    const ip = uniqueIp();
+    seedComment({ post_slug: "/posts/lock-comment-throttle", ip_address: ip, pub_date: Date.now() });
+
+    const denied = await postComment(
+      validBody({ post_slug: "/posts/lock-comment-throttle" }),
+      ip,
+      { origin: "https://evil.example" }
+    );
+    expect(denied.status).toBe(403);
+    expect((await json(denied)).reason).toBe("DOMAIN_NOT_ALLOWED");
+
+    // 白名单内来源才会走到限流，命中 60 秒冷却
+    const throttled = await postComment(
+      validBody({ post_slug: "/posts/lock-comment-throttle" }),
+      ip,
+      { origin: ORIGIN_A }
+    );
     expect(throttled.status).toBe(429);
   });
 });

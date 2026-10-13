@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -1121,4 +1122,344 @@ func TestVerifySolutionWithInstrumentation(t *testing.T) {
 // b64urlDecodeForTest 解 base64url（容忍填充），只用于检查载荷字段顺序
 func b64urlDecodeForTest(input string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(strings.TrimRight(input, "="))
+}
+
+/* ------------------------------------------------------------------ *
+ * 来源域名绑定（comment_verify_domain_enabled）
+ *
+ * 与普通的来源校验共用 allow_origin 白名单，但两个语义差异必须钉住：
+ *  - 白名单不可用（空 / 空白 / *）时 **fail-closed**，而不是像写接口那样跳过；
+ *  - 来源哈希被签进挑战与票据，A 域名签发的凭证不能在 B 域名兑换。
+ * ------------------------------------------------------------------ */
+
+const (
+	domainBlogOrigin  = "https://blog.example.com"
+	domainOtherOrigin = "https://www.example.com"
+	domainEvilOrigin  = "https://luoxuedev.top"
+)
+
+// orgHashFor 用与生产一致的口径算出某个来源的 org 哈希（要求该来源确实通过域名绑定）
+func orgHashFor(t *testing.T, origin string) string {
+	t.Helper()
+	result := utils.CheckVerifyDomain(origin, "", "")
+	if !result.Enabled || !result.OK {
+		t.Fatalf("前置条件：来源 %q 应通过域名绑定，实际 enabled=%v ok=%v decision=%q",
+			origin, result.Enabled, result.OK, result.Decision)
+	}
+	return result.OrgHash
+}
+
+// orgHashOf 只要求来源可解析，不要求命中白名单（用于构造「白名单外域名也持有一张有效票据」）
+func orgHashOf(t *testing.T, origin string) string {
+	t.Helper()
+	result := utils.CheckVerifyDomain(origin, "", "")
+	if !result.Enabled {
+		t.Fatalf("前置条件：comment_verify_domain_enabled 必须为 true")
+	}
+	if result.Origin != origin || result.OrgHash == "" {
+		t.Fatalf("前置条件：来源 %q 应可解析并生成 org 哈希，实际 origin=%q orgHash=%q",
+			origin, result.Origin, result.OrgHash)
+	}
+	return result.OrgHash
+}
+
+// enableDomainLock 开启域名绑定并配置白名单
+func enableDomainLock(t *testing.T, allowOrigin string) {
+	t.Helper()
+	setSetting(t, "comment_verify_domain_enabled", "true")
+	setSetting(t, "allow_origin", allowOrigin)
+}
+
+// challengeWith 携带来源头签发一次挑战
+func challengeWith(t *testing.T, slug, addr string, headers map[string]string, postURL string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := fmt.Sprintf(`{"post_slug":%q,"post_url":%q}`, slug, postURL)
+	return call(t, "POST", "/api/verify/challenge", body, headers, addr)
+}
+
+func TestVerifyChallengeDomainLock(t *testing.T) {
+	t.Run("关闭时不看来源，载荷里没有 org，记录也不带 origin（零副作用）", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+
+		w := challengeWith(t, "/posts/lock-off", nextRemoteAddr(), map[string]string{"Origin": domainEvilOrigin}, domainEvilOrigin+"/posts/lock-off")
+		requireStatus(t, w, 200)
+
+		var payload verifyChallengePayload
+		decodeInto(t, w, &payload)
+		raw, err := b64urlDecodeForTest(payload.Data.Prefix)
+		if err != nil {
+			t.Fatalf("prefix 不是合法 base64url: %v", err)
+		}
+		if strings.Contains(string(raw), `"org"`) {
+			t.Errorf("未开启域名绑定时载荷里不得出现 org，实际 %s", raw)
+		}
+
+		rows := listVerifyRows(t)
+		if len(rows) != 1 {
+			t.Fatalf("应只写入一条签发记录，实际 %d 条", len(rows))
+		}
+		if rows[0].Origin.Valid {
+			t.Errorf("未开启域名绑定时 origin 必须落 NULL，实际 %q", rows[0].Origin.String)
+		}
+	})
+
+	t.Run("白名单未配置：fail-closed，403 且不签发任何挑战", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		setSetting(t, "comment_verify_domain_enabled", "true")
+
+		w := challengeWith(t, "/posts/lock-nowhitelist", nextRemoteAddr(),
+			map[string]string{"Origin": domainBlogOrigin}, domainBlogOrigin+"/posts/lock-nowhitelist")
+		requireStatus(t, w, 403)
+		requireBodyCode(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "DOMAIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 DOMAIN_NOT_ALLOWED，实际 %v", m["reason"])
+		}
+
+		// 只写一条失败记录（没有挑战可签发），并把尝试的域名记下来
+		rows := listVerifyRows(t)
+		if len(rows) != 1 {
+			t.Fatalf("应只写入一条失败记录，实际 %d 条", len(rows))
+		}
+		if rows[0].Event != model.VerifyEventFail {
+			t.Errorf("event 期望 fail，实际 %q", rows[0].Event)
+		}
+		if !rows[0].Reason.Valid || rows[0].Reason.String != "domain:deny:no_whitelist" {
+			t.Errorf("reason 期望 domain:deny:no_whitelist，实际 %v", rows[0].Reason)
+		}
+		if !rows[0].Origin.Valid || rows[0].Origin.String != domainBlogOrigin {
+			t.Errorf("origin 期望 %q，实际 %v", domainBlogOrigin, rows[0].Origin)
+		}
+		if rows[0].ChallengeID.Valid {
+			t.Errorf("被拒时不应有 challenge_id，实际 %q", rows[0].ChallengeID.String)
+		}
+		if !rows[0].PostSlug.Valid || rows[0].PostSlug.String != "/posts/lock-nowhitelist" {
+			t.Errorf("post_slug 期望 /posts/lock-nowhitelist，实际 %v", rows[0].PostSlug)
+		}
+	})
+
+	t.Run("白名单为 * 时同样 fail-closed（与写接口来源校验的关键差异）", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, "*")
+
+		w := challengeWith(t, "/posts/lock-star", nextRemoteAddr(),
+			map[string]string{"Origin": domainBlogOrigin}, domainBlogOrigin+"/posts/lock-star")
+		requireStatus(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "DOMAIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 DOMAIN_NOT_ALLOWED，实际 %v", m["reason"])
+		}
+	})
+
+	t.Run("三个来源都缺时 fail-closed", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin)
+
+		w := callFromIP(t, "POST", "/api/verify/challenge", `{"post_slug":"/posts/lock-nosource"}`, nextRemoteAddr())
+		requireStatus(t, w, 403)
+
+		rows := listVerifyRows(t)
+		if len(rows) != 1 || rows[0].Reason.String != "domain:deny:no_source" {
+			t.Fatalf("应写入一条 domain:deny:no_source 失败记录，实际 %+v", rows)
+		}
+		if rows[0].Origin.Valid {
+			t.Errorf("没有可判定的来源时 origin 应为 NULL，实际 %q", rows[0].Origin.String)
+		}
+	})
+
+	t.Run("命中白名单时签发，并把来源域名签进载荷与认证记录", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin+","+domainOtherOrigin)
+		wantOrgHash := orgHashFor(t, domainBlogOrigin)
+
+		addr := nextRemoteAddr()
+		w := challengeWith(t, "/posts/lock-ok", addr,
+			map[string]string{"Origin": domainBlogOrigin, "Referer": domainBlogOrigin + "/posts/lock-ok"},
+			domainBlogOrigin+"/posts/lock-ok")
+		requireStatus(t, w, 200)
+
+		var payload verifyChallengePayload
+		decodeInto(t, w, &payload)
+		raw, err := b64urlDecodeForTest(payload.Data.Prefix)
+		if err != nil {
+			t.Fatalf("prefix 不是合法 base64url: %v", err)
+		}
+		// org 必须是**追加在末尾**的字段
+		if !strings.HasSuffix(string(raw), `"org":"`+wantOrgHash+`"}`) {
+			t.Errorf("org 必须追加在挑战载荷末尾，实际 %s", raw)
+		}
+		if !strings.HasPrefix(string(raw), `{"v":2,"cid":`) || !strings.Contains(string(raw), `","iat":`) {
+			t.Errorf("挑战载荷字段顺序必须是 v/cid/iph/slug/iat/org，实际 %s", raw)
+		}
+
+		rows := listVerifyRows(t)
+		if len(rows) != 1 {
+			t.Fatalf("应写入一条签发记录，实际 %d 条", len(rows))
+		}
+		if rows[0].Event != model.VerifyEventChallenge {
+			t.Errorf("event 期望 challenge，实际 %q", rows[0].Event)
+		}
+		if !rows[0].Origin.Valid || rows[0].Origin.String != domainBlogOrigin {
+			t.Errorf("origin 期望 %q，实际 %v", domainBlogOrigin, rows[0].Origin)
+		}
+		if !rows[0].ChallengeID.Valid || rows[0].ChallengeID.String != payload.Data.ChallengeID {
+			t.Errorf("challenge_id 期望 %q，实际 %v", payload.Data.ChallengeID, rows[0].ChallengeID)
+		}
+	})
+
+	t.Run("白名单外的来源被拒，并把该域名写进认证记录（便于排查中转）", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin)
+
+		w := challengeWith(t, "/posts/lock-evil", nextRemoteAddr(),
+			map[string]string{"Origin": domainEvilOrigin, "Referer": domainEvilOrigin + "/blog/aosp"},
+			domainEvilOrigin+"/blog/aosp")
+		requireStatus(t, w, 403)
+
+		rows := listVerifyRows(t)
+		if len(rows) != 1 {
+			t.Fatalf("应写入一条失败记录，实际 %d 条", len(rows))
+		}
+		if rows[0].Reason.String != "domain:deny:not_allowed" {
+			t.Errorf("reason 期望 domain:deny:not_allowed，实际 %q", rows[0].Reason.String)
+		}
+		if !rows[0].Origin.Valid || rows[0].Origin.String != domainEvilOrigin {
+			t.Errorf("origin 期望 %q，实际 %v", domainEvilOrigin, rows[0].Origin)
+		}
+	})
+}
+
+func TestVerifySolutionDomainLock(t *testing.T) {
+	// 兑换：来源头可指定
+	submit := func(t *testing.T, addr string, challenge verifyChallengePayload, headers map[string]string, postURL string) *httptest.ResponseRecorder {
+		t.Helper()
+		return call(t, "POST", "/api/verify/solution", solutionBody(t, verifySolutionRequest{
+			PostSlug: challenge.Data.PostSlug, Prefix: challenge.Data.Prefix, Sig: challenge.Data.Sig,
+			Nonces: solvePow(t, challenge.Data.Pow), ElapsedMs: 1000,
+		}), headers, addr)
+	}
+
+	t.Run("同域兑换成功，票据里同样带 org", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin+","+domainOtherOrigin)
+		wantOrgHash := orgHashFor(t, domainBlogOrigin)
+
+		addr := nextRemoteAddr()
+		challenge := requestChallengeWith(t, "/posts/lock-same", addr, domainBlogOrigin)
+		w := submit(t, addr, challenge, map[string]string{"Origin": domainBlogOrigin}, domainBlogOrigin+"/posts/lock-same")
+		requireStatus(t, w, 200)
+
+		var payload verifySolutionPayload
+		decodeInto(t, w, &payload)
+		body, _, ok := strings.Cut(payload.Data.Ticket, ".")
+		if !ok {
+			t.Fatalf("票据格式应为 body.sig，实际 %q", payload.Data.Ticket)
+		}
+		raw, err := b64urlDecodeForTest(body)
+		if err != nil {
+			t.Fatalf("票据 body 不是合法 base64url: %v", err)
+		}
+		if !strings.HasSuffix(string(raw), `"org":"`+wantOrgHash+`"}`) {
+			t.Errorf("org 必须追加在票据载荷末尾，实际 %s", raw)
+		}
+		if !strings.HasPrefix(string(raw), `{"v":2,"iph":`) {
+			t.Errorf("票据载荷字段顺序必须是 v/iph/slug/iat/exp/jti/org，实际 %s", raw)
+		}
+	})
+
+	t.Run("换成另一个也在白名单里的域名兑换时被拒（domain mismatch）", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin+","+domainOtherOrigin)
+
+		addr := nextRemoteAddr()
+		challenge := requestChallengeWith(t, "/posts/lock-cross", addr, domainBlogOrigin)
+		w := submit(t, addr, challenge, map[string]string{"Origin": domainOtherOrigin}, domainOtherOrigin+"/posts/lock-cross")
+
+		requireStatus(t, w, 403)
+		var payload verifySolutionPayload
+		decodeInto(t, w, &payload)
+		if payload.Message != "Verification failed" || payload.Reason != "domain mismatch" {
+			t.Errorf("期望 reason=domain mismatch，实际 message=%q reason=%q", payload.Message, payload.Reason)
+		}
+
+		// 失败同样落一条记录，并带上**本次**观测到的域名
+		var fails []verifyRecordRow
+		for _, row := range listVerifyRows(t) {
+			if row.Event == model.VerifyEventFail {
+				fails = append(fails, row)
+			}
+		}
+		if len(fails) != 1 {
+			t.Fatalf("应恰好一条失败记录，实际 %d 条", len(fails))
+		}
+		if !fails[0].Origin.Valid || fails[0].Origin.String != domainOtherOrigin {
+			t.Errorf("失败记录的 origin 期望 %q，实际 %v", domainOtherOrigin, fails[0].Origin)
+		}
+	})
+
+	t.Run("白名单外的域名兑换时直接 403 DOMAIN_NOT_ALLOWED（早于算力校验）", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin)
+
+		addr := nextRemoteAddr()
+		challenge := requestChallengeWith(t, "/posts/lock-outside", addr, domainBlogOrigin)
+		w := submit(t, addr, challenge, map[string]string{"Origin": domainEvilOrigin}, domainEvilOrigin+"/posts/lock-outside")
+
+		requireStatus(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "DOMAIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 DOMAIN_NOT_ALLOWED，实际 %v", m["reason"])
+		}
+		rows := listVerifyRows(t)
+		last := rows[len(rows)-1]
+		if last.Reason.String != "domain:deny:not_allowed" || last.Origin.String != domainEvilOrigin {
+			t.Errorf("失败记录应以 domain:deny:not_allowed 记录来源，实际 reason=%q origin=%q",
+				last.Reason.String, last.Origin.String)
+		}
+	})
+
+	t.Run("开关中途打开：没有 org 的旧挑战返回 domain required（重新验证即可）", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+
+		// 先在关闭状态下签发（载荷里没有 org）
+		addr := nextRemoteAddr()
+		challenge := requestChallengeWith(t, "/posts/lock-legacy", addr, domainBlogOrigin)
+		raw, err := b64urlDecodeForTest(challenge.Data.Prefix)
+		if err != nil {
+			t.Fatalf("prefix 不是合法 base64url: %v", err)
+		}
+		if strings.Contains(string(raw), `"org"`) {
+			t.Fatalf("前置条件：开关关闭时签发的挑战不应带 org，实际 %s", raw)
+		}
+
+		// 开关打开后再兑换同一张挑战
+		enableDomainLock(t, domainBlogOrigin)
+		w := submit(t, addr, challenge, map[string]string{"Origin": domainBlogOrigin}, domainBlogOrigin+"/posts/lock-legacy")
+
+		requireStatus(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "domain required" {
+			t.Errorf("reason 期望 domain required，实际 %v", m["reason"])
+		}
+	})
+}
+
+// requestChallengeWith 携带来源头签发一个真实挑战（域名绑定用例专用）
+func requestChallengeWith(t *testing.T, slug, addr, origin string) verifyChallengePayload {
+	t.Helper()
+	w := challengeWith(t, slug, addr, map[string]string{"Origin": origin}, origin+slug)
+	requireStatus(t, w, 200)
+
+	var challenge verifyChallengePayload
+	decodeInto(t, w, &challenge)
+	if !challenge.Data.Enabled || challenge.Data.Prefix == "" {
+		t.Fatalf("挑战未签发: %+v", challenge.Data)
+	}
+	return challenge
 }

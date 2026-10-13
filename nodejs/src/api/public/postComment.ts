@@ -8,7 +8,7 @@ import { canPostComment, checkContent, countCodePoints, MAX_POST_SLUG, sanitizeP
 import { checkCommentSpam } from "../../utils/spam";
 import { checkRequestSource, isSourceDenied } from "../../utils/origin";
 import { getSetting } from "../../utils/settings";
-import { isVerifyEnabled, verifyTicket } from "../../utils/verify";
+import { isVerifyEnabled, checkVerifyDomain, verifyTicket } from "../../utils/verify";
 import { parseMarkdown } from "../../utils/markdown";
 import { getClientIP } from "../../utils/ip";
 import LogService from "../../utils/log";
@@ -56,6 +56,34 @@ export default async (c: Context): Promise<Response> => {
           message: `Field too long (content ≤ ${MAX_CONTENT}, author ≤ ${MAX_AUTHOR}, email ≤ ${MAX_EMAIL}, url ≤ ${MAX_URL}, post_slug ≤ ${MAX_POST_SLUG})`,
         },
         400
+      );
+    }
+
+    // 来源域名绑定（comment_verify_domain_enabled）：
+    // 与下面的通用来源校验共用同一份白名单，但语义更严 —— allow_origin 未配置或为 `*` 时
+    // **不跳过**（fail-closed），而且要求票据与本请求同域。
+    //
+    // 刻意排在通用来源校验**之前**：开启域名绑定时它是更严的那道闸门，让被拒请求统一拿到
+    // 域名的 reason（DOMAIN_NOT_ALLOWED）而不是笼统的 ORIGIN_NOT_ALLOWED，便于博主区分
+    // 「白名单没配好」与「别的站点在滥用」。位置同样早于限流 / 黑名单 / 发信路径。
+    const domain = await checkVerifyDomain({
+      origin: c.req.header("origin"),
+      referer: c.req.header("referer"),
+      postUrl: data.post_url,
+    });
+    if (!domain.ok) {
+      LogService.warn("拒绝来源未授权的评论提交（域名校验）", {
+        decision: domain.decision,
+        origin: domain.origin,
+        post_slug: data.post_slug,
+      });
+      return c.json(
+        {
+          code: 403,
+          message: "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+          reason: "DOMAIN_NOT_ALLOWED",
+        },
+        403
       );
     }
 
@@ -124,7 +152,7 @@ export default async (c: Context): Promise<Response> => {
       // 注意只对「票据比对」用净化值：评论落库仍用原始 post_slug，
       // 因为读取端是按原始 post_slug 查询的，改动存储口径会让评论查不出来。
       const ticketSlug = sanitizePostSlug(data.post_slug);
-      const ticketOk = await verifyTicket(data.verify_ticket, ip, ticketSlug);
+      const ticketOk = await verifyTicket(data.verify_ticket, ip, ticketSlug, domain.orgHash);
       if (!ticketOk) {
         return c.json(
           {

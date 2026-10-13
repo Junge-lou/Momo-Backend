@@ -32,6 +32,11 @@ export interface VerifyRecordInput {
   challengeId?: string | null;
   postSlug?: string | null;
   ip?: string | null;
+  /**
+   * 归一化后的来源域名（如 `https://blog.example.com`）。
+   * 仅 comment_verify_domain_enabled 开启时有值；被域名校验拒绝的请求也记录。
+   */
+  origin?: string | null;
   geo?: CfGeo;
 }
 
@@ -100,6 +105,8 @@ export interface VerifyRecordItem {
   challengeId: string;
   postSlug: string;
   ipAddress: string;
+  /** 来源域名（域名绑定开启时有值） */
+  origin: string;
   country: string;
   network: string;
   asn: number | null;
@@ -188,8 +195,8 @@ export async function recordVerifyEvent(
 
     await env.MOMO_DB.prepare(
       `INSERT INTO VerifyRecord
-         (created_at, event, reason, elapsed_ms, difficulty, challenge_id, post_slug, ip_address, country, network, asn)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (created_at, event, reason, elapsed_ms, difficulty, challenge_id, post_slug, ip_address, origin, country, network, asn)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         now,
@@ -200,6 +207,8 @@ export async function recordVerifyEvent(
         input.challengeId ?? null,
         input.postSlug ?? null,
         input.ip ?? null,
+        // 空串与 null 一律落 NULL：未开启域名绑定时没有来源域名，不该在表里留下空串
+        input.origin ? input.origin : null,
         input.geo?.country ?? null,
         input.geo?.network ?? null,
         input.geo?.asn ?? null
@@ -546,6 +555,7 @@ export async function listVerifyRecords(
       challenge_id: string | null;
       post_slug: string | null;
       ip_address: string | null;
+      origin: string | null;
       country: string | null;
       network: string | null;
       asn: number | null;
@@ -562,6 +572,7 @@ export async function listVerifyRecords(
       challengeId: row.challenge_id || '',
       postSlug: row.post_slug || '',
       ipAddress: row.ip_address || '',
+      origin: row.origin || '',
       country: row.country || '',
       network: row.network || '',
       asn: row.asn === null || row.asn === undefined ? null : Number(row.asn),

@@ -32,6 +32,7 @@ var canonicalSettingKeys = []string{
 	"comment_spam_min_length",
 	"comment_verify_block_automated",
 	"comment_verify_difficulty",
+	"comment_verify_domain_enabled",
 	"comment_verify_enabled",
 	"comment_verify_instr_enabled",
 	"comment_verify_log_challenge",

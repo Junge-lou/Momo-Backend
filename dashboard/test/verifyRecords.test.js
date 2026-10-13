@@ -276,6 +276,52 @@ describe('VerifyRecords - 明细表与筛选', () => {
 		});
 		const headers = wrapper.findAll('thead th').map((th) => th.text());
 		expect(headers).not.toContain('地区');
+		// 来源域名列与 geoSupported 无关，任何时候都要在
+		expect(headers).toContain('来源域名');
+	});
+
+	it('来源域名：有值时展示，无值时占位（未开启域名绑定的记录）', async () => {
+		await mountPage({
+			records: makeRecords({
+				list: [
+					{
+						id: 1,
+						createdAt: '2026-04-26T12:34:56.789Z',
+						event: 'fail',
+						reason: 'domain:deny:not_allowed',
+						elapsedMs: null,
+						difficulty: 1000000,
+						challengeId: '',
+						postSlug: '',
+						ipAddress: '203.0.113.42',
+						origin: 'https://luoxuedev.top',
+						country: '',
+						network: '',
+						asn: null,
+					},
+					{
+						id: 2,
+						createdAt: '2026-04-26T12:34:50.000Z',
+						event: 'challenge',
+						reason: '',
+						elapsedMs: null,
+						difficulty: 1000000,
+						challengeId: 'cid-2',
+						postSlug: '/posts/hello-world',
+						ipAddress: '203.0.113.42',
+						origin: '',
+						country: '',
+						network: '',
+						asn: null,
+					},
+				],
+			}),
+		});
+
+		const cells = wrapper.findAll('tbody tr').map((row) => row.findAll('td').map((td) => td.text()));
+		// 列顺序：时间 / 事件 / 原因 / 耗时 / 来源 IP / 来源域名 / 文章（geoSupported=false 时无地区列）
+		expect(cells[0][5]).toBe('https://luoxuedev.top');
+		expect(cells[1][5]).toBe('—');
 	});
 
 	it('筛选后按事件/IP/文章重新请求第一页', async () => {

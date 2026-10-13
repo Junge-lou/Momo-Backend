@@ -42,6 +42,24 @@ func makeSignedPrefix(t *testing.T, secret, cid, ip, slug string, iat int64) (pr
 	return prefix, hmacSHA256(prefix, secret)
 }
 
+// makeSignedPrefixWithOrg 构造「开启来源域名绑定」时的前缀（org 追加在末尾）并给出正确签名
+func makeSignedPrefixWithOrg(t *testing.T, secret, cid, ip, slug string, iat int64, org string) (prefix, sig string) {
+	t.Helper()
+	raw, err := json.Marshal(verifyChallengePayload{
+		V:    VerifyProtocolVersion,
+		Cid:  cid,
+		Iph:  hashVerifyIP(ip, secret),
+		Slug: slug,
+		Iat:  &iat,
+		Org:  org,
+	})
+	if err != nil {
+		t.Fatalf("序列化挑战载荷失败: %v", err)
+	}
+	prefix = b64urlEncode(raw)
+	return prefix, hmacSHA256(prefix, secret)
+}
+
 // makeTicket 按生产口径签发票据（可自定义版本/有效期等字段，便于构造异常票据）
 func makeTicket(t *testing.T, secret string, payload verifyTicketPayload) string {
 	t.Helper()
@@ -1354,6 +1372,7 @@ func TestSha256Hex(t *testing.T) {
 	})
 }
 
+// TestHashVerifyIP 钉住 IP 哈希的派生标签、截断长度与稳定性
 func TestHashVerifyIP(t *testing.T) {
 	secret := "s3cret"
 
@@ -1380,5 +1399,328 @@ func TestSha256Reference(t *testing.T) {
 	sum := sha256.Sum256([]byte("momo"))
 	if sha256Hex("momo") != hex.EncodeToString(sum[:]) {
 		t.Errorf("sha256Hex 与标准库不一致")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 来源域名绑定（comment_verify_domain_enabled）
+// ---------------------------------------------------------------------------
+
+const (
+	testBlogOrigin  = "https://blog.example.com"
+	testOtherOrigin = "https://www.example.com"
+	testEvilOrigin  = "https://luoxuedev.top"
+)
+
+// TestCheckVerifyDomainDisabled 关闭时不做任何判定，且不生成来源哈希（零副作用）
+func TestCheckVerifyDomainDisabled(t *testing.T) {
+	resetSettings(t)
+	setSetting(t, "allow_origin", testBlogOrigin)
+
+	result := CheckVerifyDomain(testBlogOrigin, testBlogOrigin+"/x", testBlogOrigin+"/x")
+	if result.Enabled {
+		t.Errorf("未开启域名绑定时 enabled 应为 false，实际 true")
+	}
+	if !result.OK {
+		t.Errorf("未开启域名绑定时 ok 必须为 true（不拦截任何人）")
+	}
+	if result.Decision != "disabled" {
+		t.Errorf("判定码期望 disabled，实际 %q", result.Decision)
+	}
+	if result.Origin != "" || result.OrgHash != "" {
+		t.Errorf("未开启时 origin / orgHash 必须为空串，实际 %q / %q", result.Origin, result.OrgHash)
+	}
+
+	// 设置项只认字符串 "true"，其它取值（含大小写差异）一律视为关闭
+	for _, value := range []string{"", "false", "TRUE", "1", "yes"} {
+		setSetting(t, settingVerifyDomainEnabled, value)
+		if IsDomainLockEnabled() {
+			t.Errorf("comment_verify_domain_enabled=%q 时不应视为开启", value)
+		}
+	}
+	setSetting(t, settingVerifyDomainEnabled, "true")
+	if !IsDomainLockEnabled() {
+		t.Errorf(`comment_verify_domain_enabled="true" 时应视为开启`)
+	}
+}
+
+// TestCheckVerifyDomainDecisions 钉住开启后的判定码、绑定来源与来源哈希
+func TestCheckVerifyDomainDecisions(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		allowOrigin string
+		origin      string
+		referer     string
+		postURL     string
+		wantOK      bool
+		wantReason  string
+		wantOrigin  string
+	}{
+		{"命中白名单", testBlogOrigin, testBlogOrigin, testBlogOrigin + "/posts/x", testBlogOrigin + "/posts/x",
+			true, OriginDecisionAllow, testBlogOrigin},
+		{"只有 Referer 命中", testBlogOrigin, "", testBlogOrigin + "/posts/x?y=1#f", "",
+			true, OriginDecisionAllow, testBlogOrigin},
+		{"服务端转发只有 post_url 命中", testBlogOrigin, "", "", testBlogOrigin + "/posts/x",
+			true, OriginDecisionAllow, testBlogOrigin},
+		{"白名单不可用：fail-closed", "", testBlogOrigin, "", "",
+			false, DomainLockDecisionDenyNoWhitelist, testBlogOrigin},
+		{"allow_origin=* 同样 fail-closed", "*", testBlogOrigin, "", "",
+			false, DomainLockDecisionDenyNoWhitelist, testBlogOrigin},
+		{"三个来源都缺", testBlogOrigin, "", "", "",
+			false, OriginDecisionDenyNoSource, ""},
+		{"来源不可解析", testBlogOrigin, "null", "", testBlogOrigin + "/x",
+			false, OriginDecisionDenyInvalidSource, testBlogOrigin},
+		{"来源不在白名单（被拒也保留观测到的域名）", testBlogOrigin, testEvilOrigin, "", "",
+			false, OriginDecisionDenyNotAllowed, testEvilOrigin},
+		{"Origin 命中但 Referer 不命中", testBlogOrigin, testBlogOrigin, testEvilOrigin + "/x", "",
+			false, OriginDecisionDenyNotAllowed, testBlogOrigin},
+		{"多域名白名单命中其一", testBlogOrigin + "," + testOtherOrigin, testOtherOrigin, "", "",
+			true, OriginDecisionAllow, testOtherOrigin},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetSettings(t)
+			setSetting(t, settingVerifyDomainEnabled, "true")
+			setSetting(t, "allow_origin", tc.allowOrigin)
+
+			result := CheckVerifyDomain(tc.origin, tc.referer, tc.postURL)
+			if !result.Enabled {
+				t.Fatalf("开启域名绑定时 enabled 应为 true")
+			}
+			if result.OK != tc.wantOK {
+				t.Errorf("ok 期望 %v，实际 %v（decision=%q）", tc.wantOK, result.OK, result.Decision)
+			}
+			if result.Decision != tc.wantReason {
+				t.Errorf("判定码期望 %q，实际 %q", tc.wantReason, result.Decision)
+			}
+			if result.Origin != tc.wantOrigin {
+				t.Errorf("绑定来源期望 %q，实际 %q", tc.wantOrigin, result.Origin)
+			}
+
+			// orgHash 只在「来源可判定」时有值，且必须与 hashOrigin 逐字一致
+			if tc.wantOrigin == "" {
+				if result.OrgHash != "" {
+					t.Errorf("来源不可判定时 orgHash 应为空串，实际 %q", result.OrgHash)
+				}
+				return
+			}
+			want := hashOrigin(tc.wantOrigin, getVerifySecret())
+			if result.OrgHash != want {
+				t.Errorf("orgHash 期望 %q，实际 %q", want, result.OrgHash)
+			}
+			if len(result.OrgHash) != 16 {
+				t.Errorf("orgHash 应为 16 位十六进制，实际 %d 位", len(result.OrgHash))
+			}
+		})
+	}
+}
+
+// TestVerifySolutionDomainBinding 挑战 → 票据是同一条域名链：
+// 缺 org 返回 domain required，org 不一致返回 domain mismatch，
+// 且**域名不匹配不得消耗挑战**（换对了来源还能正常兑换）。
+func TestVerifySolutionDomainBinding(t *testing.T) {
+	resetSettings(t)
+	setTestDifficulty(t, "1000")
+	setSetting(t, settingVerifyDomainEnabled, "true")
+	setSetting(t, "allow_origin", testBlogOrigin+","+testOtherOrigin)
+
+	secret := getVerifySecret()
+	ip := "1.2.3.4"
+	now := time.Now().UnixMilli()
+	blogHash := hashOrigin(testBlogOrigin, secret)
+	otherHash := hashOrigin(testOtherOrigin, secret)
+
+	// 1) 挑战里没有 org（签发时开关还没开）=> domain required（重新验证即可）
+	legacyCID := "cid-domain-legacy"
+	legacyPrefix, legacySig := makeSignedPrefix(t, secret, legacyCID, ip, testPostSlug, now)
+	if ok, reason := VerifySolution(VerifySolutionInput{
+		Prefix: legacyPrefix, Sig: legacySig, Nonces: mustJSON(t, solveNoncesFor(t, legacyCID, secret)),
+		ElapsedMs: mustJSON(t, 500), IP: ip, PostSlug: testPostSlug, OrgHash: blogHash,
+	}); ok || reason != "domain required" {
+		t.Errorf("缺少 org 应以 domain required 拒绝，实际 ok=%v reason=%q", ok, reason)
+	}
+
+	// 2) 挑战绑定在 blog 域：换另一个（也在白名单里的）域名兑换 => domain mismatch
+	cid := "cid-domain-locked"
+	prefix, sig := makeSignedPrefixWithOrg(t, secret, cid, ip, testPostSlug, now, blogHash)
+	nonces := solveNoncesFor(t, cid, secret)
+
+	redeem := func(orgHash string) (bool, string) {
+		t.Helper()
+		return VerifySolution(VerifySolutionInput{
+			Prefix: prefix, Sig: sig, Nonces: mustJSON(t, nonces),
+			ElapsedMs: mustJSON(t, 500), IP: ip, PostSlug: testPostSlug, OrgHash: orgHash,
+		})
+	}
+
+	if ok, reason := redeem(otherHash); ok || reason != "domain mismatch" {
+		t.Errorf("来源不一致应以 domain mismatch 拒绝，实际 ok=%v reason=%q", ok, reason)
+	}
+	// 域名不匹配不得消耗挑战：换回正确的来源仍应成功
+	if ok, reason := redeem(blogHash); !ok {
+		t.Errorf("域名不匹配不应消耗挑战，实际 ok=%v reason=%q", ok, reason)
+	}
+	// 挑战已用之后再拿别的域名兑换：域名校验仍先于防重放
+	if ok, reason := redeem(otherHash); ok || reason != "domain mismatch" {
+		t.Errorf("已用挑战的域名校验仍应先于防重放，实际 ok=%v reason=%q", ok, reason)
+	}
+	if ok, reason := redeem(blogHash); ok || reason != "challenge already used" {
+		t.Errorf("同一挑战二次兑换应以 challenge already used 拒绝，实际 ok=%v reason=%q", ok, reason)
+	}
+}
+
+// TestVerifySolutionDomainBindingLockedChallenge 为已开启域名绑定的来源签发挑战：
+// 带 org 的载荷只能由同一个来源兑换，且未开启时不看 org。
+func TestVerifySolutionDomainBindingLockedChallenge(t *testing.T) {
+	resetSettings(t)
+	setTestDifficulty(t, "1000")
+	setSetting(t, settingVerifyDomainEnabled, "true")
+	setSetting(t, "allow_origin", testBlogOrigin+","+testOtherOrigin)
+
+	secret := getVerifySecret()
+	ip := "1.2.3.4"
+	cid := "cid-domain-locked"
+	orgHash := hashOrigin(testBlogOrigin, secret)
+	now := time.Now().UnixMilli()
+
+	prefix, sig := makeSignedPrefixWithOrg(t, secret, cid, ip, testPostSlug, now, orgHash)
+	nonces := solveNoncesFor(t, cid, secret)
+
+	// 同一来源：通过
+	if ok, reason := VerifySolution(VerifySolutionInput{
+		Prefix: prefix, Sig: sig, Nonces: mustJSON(t, nonces),
+		ElapsedMs: mustJSON(t, 500), IP: ip, PostSlug: testPostSlug, OrgHash: orgHash,
+	}); !ok {
+		t.Fatalf("同一来源兑换应通过，实际 reason=%q", reason)
+	}
+
+	// 关掉开关（orgHash 为空串）时不看 org：带 org 的载荷也不影响
+	cid2 := "cid-domain-off"
+	prefix2, sig2 := makeSignedPrefixWithOrg(t, secret, cid2, ip, testPostSlug, now, orgHash)
+	if ok, reason := VerifySolution(VerifySolutionInput{
+		Prefix: prefix2, Sig: sig2, Nonces: mustJSON(t, solveNoncesFor(t, cid2, secret)),
+		ElapsedMs: mustJSON(t, 500), IP: ip, PostSlug: testPostSlug,
+	}); !ok {
+		t.Errorf("未开启域名绑定时不应校验 org，实际 reason=%q", reason)
+	}
+}
+
+// TestVerifySolutionOrgMustBeString org 出现但不是字符串时属于**畸形载荷**，
+// 不能退化成 domain mismatch（那会掩盖实现缺陷）。
+func TestVerifySolutionOrgMustBeString(t *testing.T) {
+	resetSettings(t)
+	setTestDifficulty(t, "1000")
+
+	secret := getVerifySecret()
+	ip := "1.2.3.4"
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"org 是数字", `{"v":2,"cid":"c1","iph":"` + hashVerifyIP(ip, secret) + `","slug":"` + testPostSlug + `","iat":1,"org":123}`},
+		{"org 是 null", `{"v":2,"cid":"c2","iph":"` + hashVerifyIP(ip, secret) + `","slug":"` + testPostSlug + `","iat":1,"org":null}`},
+		{"org 是对象", `{"v":2,"cid":"c3","iph":"` + hashVerifyIP(ip, secret) + `","slug":"` + testPostSlug + `","iat":1,"org":{}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix := b64urlEncode([]byte(tc.body))
+			if ok, reason := VerifySolution(VerifySolutionInput{
+				Prefix: prefix, Sig: hmacSHA256(prefix, secret), Nonces: mustJSON(t, []any{"0", "0", "0", "0"}),
+				ElapsedMs: mustJSON(t, 500), IP: ip, PostSlug: testPostSlug,
+			}); ok || reason != "malformed payload" {
+				t.Errorf("非字符串 org 应以 malformed payload 拒绝，实际 ok=%v reason=%q", ok, reason)
+			}
+		})
+	}
+}
+
+// TestVerifyTicketDomainBinding 票据只在签发它的域名下可用：
+// 开启时缺 org 或不匹配一律 false；未开启时不看 org。
+func TestVerifyTicketDomainBinding(t *testing.T) {
+	resetSettings(t)
+	secret := getVerifySecret()
+	ip := "1.2.3.4"
+	slug := "/posts/a"
+	now := time.Now().UnixMilli()
+
+	blogHash := hashOrigin(testBlogOrigin, secret)
+	otherHash := hashOrigin(testOtherOrigin, secret)
+
+	locked := makeTicket(t, secret, verifyTicketPayload{
+		V: VerifyProtocolVersion, Iph: hashVerifyIP(ip, secret), Slug: slug,
+		Iat: now, Exp: now + int64(ticketTTL/time.Millisecond), Jti: "jti", Org: blogHash,
+	})
+	unlocked := makeTicket(t, secret, verifyTicketPayload{
+		V: VerifyProtocolVersion, Iph: hashVerifyIP(ip, secret), Slug: slug,
+		Iat: now, Exp: now + int64(ticketTTL/time.Millisecond), Jti: "jti",
+	})
+
+	if !VerifyTicket(locked, ip, slug, blogHash) {
+		t.Errorf("同域票据应通过校验")
+	}
+	if VerifyTicket(locked, ip, slug, otherHash) {
+		t.Errorf("票据不应跨域有效")
+	}
+	if !VerifyTicket(locked, ip, slug, "") {
+		t.Errorf("未开启域名绑定时不应校验 org")
+	}
+	if VerifyTicket(unlocked, ip, slug, blogHash) {
+		t.Errorf("开启域名绑定时，没有 org 的旧票据必须失败")
+	}
+	if !VerifyTicket(unlocked, ip, slug) {
+		t.Errorf("未开启域名绑定时，没有 org 的票据仍应通过")
+	}
+
+	// 票据载荷里 org 必须追加在末尾
+	body, _, _ := strings.Cut(locked, ".")
+	raw, err := b64urlDecode(body)
+	if err != nil {
+		t.Fatalf("票据 body 不是合法 base64url: %v", err)
+	}
+	if !strings.HasSuffix(string(raw), `"jti":"jti","org":"`+blogHash+`"}`) {
+		t.Errorf("org 必须是票据载荷的最后一个字段，实际 %s", raw)
+	}
+}
+
+// TestCreateVerifyChallengeWithOrgHash 签发的挑战必须把来源哈希签进载荷末尾，
+// 且未传时整个字段缺席（形状与旧版本完全一致）。
+func TestCreateVerifyChallengeWithOrgHash(t *testing.T) {
+	resetSettings(t)
+	setTestDifficulty(t, "1000")
+
+	orgHash := hashOrigin(testBlogOrigin, getVerifySecret())
+
+	locked, err := CreateVerifyChallenge("1.2.3.4", testPostSlug, orgHash)
+	if err != nil {
+		t.Fatalf("签发挑战失败: %v", err)
+	}
+	raw, err := b64urlDecode(locked.Prefix)
+	if err != nil {
+		t.Fatalf("前缀不是合法 base64url: %v", err)
+	}
+	if !strings.HasSuffix(string(raw), `"org":"`+orgHash+`"}`) {
+		t.Errorf("org 必须追加在挑战载荷末尾，实际 %s", raw)
+	}
+	// 字段顺序固定为 v / cid / iph / slug / iat / org
+	if !strings.HasPrefix(string(raw), `{"v":2,"cid":`) || !strings.Contains(string(raw), `","iat":`) {
+		t.Errorf("挑战载荷字段顺序漂移：%s", raw)
+	}
+	var payload verifyChallengePayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("前缀载荷不是合法 JSON: %v", err)
+	}
+	if payload.Org != orgHash {
+		t.Errorf("载荷里的 org 期望 %q，实际 %q", orgHash, payload.Org)
+	}
+
+	unlocked, err := CreateVerifyChallenge("1.2.3.4", testPostSlug)
+	if err != nil {
+		t.Fatalf("签发挑战失败: %v", err)
+	}
+	rawUnlocked, err := b64urlDecode(unlocked.Prefix)
+	if err != nil {
+		t.Fatalf("前缀不是合法 base64url: %v", err)
+	}
+	if strings.Contains(string(rawUnlocked), `"org"`) {
+		t.Errorf("未开启域名绑定时载荷里不得出现 org 字段，实际 %s", rawUnlocked)
 	}
 }

@@ -20,8 +20,9 @@ const ISO_PUB_DATE = '2024-03-05T06:07:08.000Z';
 const ISO_MILLIS = 1709618828000;
 const MIGRATION_ID = '0001_pub_date_to_millis';
 const MIGRATION_ID_VERIFY_RECORD = '0002_verify_record_table';
+const MIGRATION_ID_VERIFY_RECORD_ORIGIN = '0003_verify_record_origin';
 /** 已发布的迁移 id 列表（顺序即执行顺序）：新增迁移时必须同步这里 */
-const MIGRATION_IDS = [MIGRATION_ID, MIGRATION_ID_VERIFY_RECORD];
+const MIGRATION_IDS = [MIGRATION_ID, MIGRATION_ID_VERIFY_RECORD, MIGRATION_ID_VERIFY_RECORD_ORIGIN];
 
 /** 读取某条评论 pub_date 的 SQLite 存储类型（integer / text / real / null） */
 async function typeofPubDate(id: number): Promise<string | null> {
@@ -140,6 +141,59 @@ describe('ensureMigrated —— 0002_verify_record_table', () => {
 		]);
 
 		expect((await migrationRows()).map((row) => row.id)).toEqual(MIGRATION_IDS);
+	});
+});
+
+describe('ensureMigrated —— 0003_verify_record_origin', () => {
+	/** VerifyRecord 当前的全部列名 */
+	async function verifyRecordColumns(): Promise<string[]> {
+		const { results } = await testEnv.MOMO_DB.prepare('PRAGMA table_info(VerifyRecord)').all<{
+			name: string;
+		}>();
+		return (results ?? []).map((row) => row.name);
+	}
+
+	it('为升级前的旧表补上 origin 列（无需手工执行 SQL）', async () => {
+		await createSchema();
+		// 模拟升级前的 VerifyRecord：为域名绑定新增该列之前的结构
+		await testEnv.MOMO_DB.prepare('DROP TABLE IF EXISTS VerifyRecord').run();
+		await testEnv.MOMO_DB.prepare(
+			`CREATE TABLE VerifyRecord (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         created_at INTEGER NOT NULL,
+         event TEXT NOT NULL,
+         reason TEXT,
+         elapsed_ms INTEGER,
+         difficulty INTEGER,
+         challenge_id TEXT,
+         post_slug TEXT,
+         ip_address TEXT,
+         country TEXT,
+         network TEXT,
+         asn INTEGER
+       )`
+		).run();
+		expect(await verifyRecordColumns()).not.toContain('origin');
+
+		const { ensureMigrated } = await import('../../src/utils/migrations?case=verify-origin');
+		await ensureMigrated(env);
+
+		expect(await verifyRecordColumns()).toContain('origin');
+		expect((await migrationRows()).map((row) => row.id)).toEqual(MIGRATION_IDS);
+	});
+
+	it('列已由建表 DDL 建出时容忍 duplicate column name（新库不会反复报错）', async () => {
+		// createSchema() 用的是最新 schemas/comment.sql：VerifyRecord 一开始就有 origin
+		await createSchema();
+		expect(await verifyRecordColumns()).toContain('origin');
+
+		const { ensureMigrated } = await import('../../src/utils/migrations?case=verify-origin-dup');
+		await expect(ensureMigrated(env)).resolves.toBeUndefined();
+
+		// 迁移仍然被记为已应用（否则每个 isolate 都要重跑一遍注定报错的 ALTER）
+		expect((await migrationRows()).map((row) => row.id)).toEqual(MIGRATION_IDS);
+		// 且不会重复加列
+		expect((await verifyRecordColumns()).filter((name) => name === 'origin')).toHaveLength(1);
 	});
 });
 

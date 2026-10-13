@@ -143,6 +143,7 @@
                 <th class="px-4 py-3 text-xs font-semibold uppercase text-gray-500">原因</th>
                 <th class="px-4 py-3 text-xs font-semibold uppercase text-gray-500 whitespace-nowrap">耗时</th>
                 <th class="px-4 py-3 text-xs font-semibold uppercase text-gray-500 whitespace-nowrap">来源 IP</th>
+                <th class="px-4 py-3 text-xs font-semibold uppercase text-gray-500 whitespace-nowrap">来源域名</th>
                 <th v-if="overview.geoSupported" class="px-4 py-3 text-xs font-semibold uppercase text-gray-500 whitespace-nowrap">地区</th>
                 <th class="px-4 py-3 text-xs font-semibold uppercase text-gray-500">文章</th>
               </tr>
@@ -161,6 +162,11 @@
                 </td>
                 <td class="px-4 py-3 text-xs text-gray-600 whitespace-nowrap tabular-nums">{{ formatDuration(row.elapsedMs) }}</td>
                 <td class="px-4 py-3 text-xs text-gray-600 font-mono whitespace-nowrap">{{ row.ipAddress || '—' }}</td>
+                <!-- 来源域名：仅在开启「来源域名绑定」后有值；被拒的请求也会记下来，便于发现中转滥用 -->
+                <td class="px-4 py-3 text-xs text-gray-600 font-mono whitespace-nowrap">
+                  <span v-if="row.origin" class="block max-w-[200px] truncate" :title="row.origin">{{ row.origin }}</span>
+                  <span v-else class="text-gray-300">—</span>
+                </td>
                 <td v-if="overview.geoSupported" class="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
                   <template v-if="row.country || row.network">
                     <span :title="row.network ? `${row.network}${row.asn ? ` (AS${row.asn})` : ''}` : row.country">
@@ -174,7 +180,7 @@
                 </td>
               </tr>
               <tr v-if="records.list.length === 0">
-                <td :colspan="overview.geoSupported ? 7 : 6" class="px-4 py-10 text-center text-sm text-gray-400">
+                <td :colspan="overview.geoSupported ? 8 : 7" class="px-4 py-10 text-center text-sm text-gray-400">
                   {{ hasFilters ? '没有符合条件的认证记录' : '该时间段内没有认证记录' }}
                 </td>
               </tr>

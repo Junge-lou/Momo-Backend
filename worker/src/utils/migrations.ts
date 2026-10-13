@@ -61,6 +61,17 @@ const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_vr_cid ON VerifyRecord(challenge_id)`,
     ],
   },
+  {
+    /**
+     * 来源域名绑定：认证明细增加来源域名列。
+     *
+     * 与 schemas/comment.sql 里的定义一致：新库由那份 DDL 直接建出该列，
+     * 已部署的 D1 靠这条迁移补齐。纯新增列，旧行为 NULL。
+     */
+    id: '0003_verify_record_origin',
+    description: 'VerifyRecord 增加 origin 列（来源域名绑定：记录解题/被拒的来源域名）',
+    statements: [`ALTER TABLE VerifyRecord ADD COLUMN origin TEXT`],
+  },
 ];
 
 const SCHEMA_MIGRATION_DDL = `
@@ -95,15 +106,40 @@ async function runMigrations(env: Bindings): Promise<void> {
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.id)) continue;
 
-    // D1 batch 是事务性的：迁移语句与记录要么全部生效，要么全部回滚
-    await env.MOMO_DB.batch([
-      ...migration.statements.map((sql) => env.MOMO_DB.prepare(sql)),
-      env.MOMO_DB.prepare(
-        'INSERT INTO SchemaMigration (id, description) VALUES (?, ?)'
-      ).bind(migration.id, migration.description),
-    ]);
+    const record = env.MOMO_DB.prepare(
+      'INSERT INTO SchemaMigration (id, description) VALUES (?, ?)'
+    ).bind(migration.id, migration.description);
+
+    try {
+      // D1 batch 是事务性的：迁移语句与记录要么全部生效，要么全部回滚
+      await env.MOMO_DB.batch([
+        ...migration.statements.map((sql) => env.MOMO_DB.prepare(sql)),
+        record,
+      ]);
+    } catch (e) {
+      // 新库由 schemas/comment.sql 一次性建出全部列，随后的「补列」迁移会撞上
+      // duplicate column name —— 那说明目标状态已经达成，按已应用处理，
+      // 否则每个 isolate 都会重复报错、永远记不上这条迁移。
+      // 此时改用逐条执行并容忍该错误（batch 是事务性的，整体回滚后重来一次即可）。
+      if (!isDuplicateColumnError(e)) throw e;
+      for (const sql of migration.statements) {
+        try {
+          await env.MOMO_DB.prepare(sql).run();
+        } catch (inner) {
+          if (!isDuplicateColumnError(inner)) throw inner;
+        }
+      }
+      await record.run();
+    }
+
     console.log(`[migration] applied ${migration.id}: ${migration.description}`);
   }
+}
+
+/** 是否是「列已存在」错误（SQLite / D1 的文案：duplicate column name: xxx） */
+function isDuplicateColumnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /duplicate column name/i.test(message);
 }
 
 /**

@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import fixture from '../../../doc/vectors/origin-v1.json';
 import {
 	ORIGIN_DECISION,
+	DOMAIN_LOCK_DECISION,
 	parseOriginLike,
 	checkRequestSource,
+	checkDomainLock,
 	isSourceDenied,
 } from '../../src/utils/origin';
 
@@ -70,5 +72,38 @@ describe('vectors/origin-v1 — 拒绝语义', () => {
 		expect(
 			checkRequestSource({ allowOrigin: 'https://a.com', origin: '   ', referer: null, postUrl: undefined })
 		).toBe(ORIGIN_DECISION.DENY_NO_SOURCE);
+	});
+});
+
+/**
+ * 域名绑定（comment_verify_domain_enabled）与普通来源校验共用解析/白名单口径，
+ * 但白名单不可用时不是 skip 而是 fail-closed，并额外给出用于签进挑战/票据的来源。
+ */
+describe('vectors/origin-v1 — 来源域名绑定（lock）', () => {
+	it('fixture 含 lock 段', () => {
+		expect(Array.isArray(fixture.lock)).toBe(true);
+		expect(fixture.lock.length).toBeGreaterThan(0);
+	});
+
+	for (const vector of fixture.lock ?? []) {
+		it(vector.name, () => {
+			const result = checkDomainLock({
+				allowOrigin: vector.allowOrigin,
+				origin: vector.origin,
+				referer: vector.referer,
+				postUrl: vector.postUrl,
+			});
+			expect(result.decision).toBe(vector.want.decision);
+			expect(result.origin).toBe(vector.want.origin);
+			expect(result.ok).toBe(vector.want.decision === ORIGIN_DECISION.ALLOW);
+		});
+	}
+
+	it('allow_origin 不可用时绝不等于放行（与 decide 段的 skip 形成对照）', () => {
+		for (const allowOrigin of ['', '   ', '*', 'https://a.com,*']) {
+			const result = checkDomainLock({ allowOrigin, origin: 'https://a.com' });
+			expect(result.ok).toBe(false);
+			expect(result.decision).toBe(DOMAIN_LOCK_DECISION.DENY_NO_WHITELIST);
+		}
 	});
 });
