@@ -7,6 +7,7 @@ import { isVerifyEnabled, verifyTicket } from '../../utils/verify';
 import { checkCommentSpam } from '../../utils/spam';
 import { parseMarkdown } from '../../utils/markdown';
 import { toMillis } from '../../utils/time';
+import { isRequestOriginAllowed } from '../../utils/cors';
 import {
   checkContent,
   sanitizeUrl,
@@ -60,6 +61,12 @@ async function getCommentStatus(env: Bindings): Promise<string> {
 }
 
 export const postComment = async (c: Context<{ Bindings: Bindings }>) => {
+  // 0. 服务端来源校验：CORS 只是浏览器机制，挡不住服务器转发的跨站提交；
+  //    Origin/Referer 存在且与 allow_origin 白名单不符时直接拒绝
+  if (!(await isRequestOriginAllowed(c.env, c.req.header('origin'), c.req.header('referer')))) {
+    return c.json({ code: 403, message: "Origin not allowed" }, 403);
+  }
+
   const data = await c.req.json();
   const userAgent = c.req.header('user-agent') || "";
 
