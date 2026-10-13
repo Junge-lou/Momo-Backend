@@ -52,7 +52,7 @@
 | 200 | 请求成功 | 操作成功 |
 | 400 | 请求参数错误 | 缺少必填字段、格式不正确、字段超长、非法状态值、非法 IP/CIDR 等 |
 | 401 | 未授权 | 未携带 Token 或 Token 失效 |
-| 403 | 禁止访问 | IP 被封禁、IP/邮箱在黑名单中、登录失败次数过多 |
+| 403 | 禁止访问 | 来源不在 `allow_origin` 白名单、IP 被封禁、IP/邮箱在黑名单中、登录失败次数过多 |
 | 404 | 资源不存在 | 资源不存在场景 |
 | 429 | 请求过于频繁 | 评论频率超过限制（同一 IP 60 秒一条，`admin_email` 不受限）、公开评论列表请求过于频繁 |
 | 500 | 服务器内部错误 | 未捕获异常、数据库错误等 |
@@ -78,6 +78,8 @@
 ```
 
 > `admin_key` 仅在管理员评论密钥开启且邮箱为管理员邮箱时需要；`verify_ticket` 仅在 `comment_verify_enabled` 为 `"true"` 时需要，由 `/api/verify/solution` 下发。
+> `post_url` 除用于通知邮件里的「查看回复」链接外，还参与**服务端来源校验**（见下方说明），
+> 因此自定义前端应传页面的绝对地址（官方组件传的是 `window.location.href`）。
 
 **响应（成功）**：
 ```json
@@ -121,6 +123,13 @@
 ```json
 {
   "code": 403,
+  "message": "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+  "reason": "ORIGIN_NOT_ALLOWED"
+}
+```
+```json
+{
+  "code": 403,
   "message": "Human verification failed or expired",
   "reason": "VERIFY_REQUIRED"
 }
@@ -128,6 +137,21 @@
 
 > 当 `comment_verify_enabled` 设为 `"true"` 时，必须携带有效的 `verify_ticket`，否则返回上面的 `VERIFY_REQUIRED`。
 > 使用管理员评论密钥验证通过的博主评论不受此限制。
+
+> **服务端来源校验**：`allow_origin` 配置成白名单（非空且不含 `*`）时，提交评论会**先**校验请求声明的来源 ——
+> 请求头 `Origin`、请求头 `Referer`、请求体 `post_url` 三者中**所有存在的来源都必须落在白名单内**，
+> 且至少要有一个可判定；三者全缺、值无法解析（`Origin: null`、相对地址的 `post_url`、非 `http(s)` 协议）
+> 或任一不匹配，一律返回 `403`（`reason: "ORIGIN_NOT_ALLOWED"`），**不写入评论、不发送任何邮件**
+> （站长通知、回复通知、邮箱验证邮件都在校验之后）。
+>
+> 这道校验堵的是「fork 一份前端 + 在自己服务器上转发请求」的用法：CORS 是浏览器机制，
+> 只决定浏览器能不能读响应，对服务端到服务端的转发完全无效（对方站点能用你的 SMTP 发信正是这样发生的）。
+>
+> 白名单条目可写完整来源（`https://a.com`、`http://localhost:17171`）或裸主机名（`a.com`，此时忽略 scheme 与端口）；
+> 大小写、尾斜杠与默认端口（`http:80` / `https:443`）会被归一化；**不支持通配符子域**。
+> 校验口径由 `doc/vectors/origin-v1.json` 在 Node / Go / Worker 三端钉死。
+> 合法部署示例：浏览器直连时 `Origin` 命中即可；若站点自己做了服务端转发（无 `Origin`/`Referer`），
+> 只要把页面的 `post_url` 原样透传，同样能通过。
 
 > **评论频率限制**：同一 IP 60 秒内只能提交一条评论，超出返回 `429`。
 > **例外**：`email` 等于 `admin_email` 的评论（管理员本人）不受该 60 秒冷却限制。
@@ -802,7 +826,12 @@ block             = nonce / n                        // 整数除法
 > - `comment_verify_log_challenge` 控制是否记录「签发挑战」事件，默认 `"true"`；设为 `"false"` 只记录通过/失败以降低写入量
 > - `admin_password` **不在允许写入的字段中**，直接提交会返回 `400`；修改密码请使用 `PUT /admin/password`（需要提供旧凭据）
 > - `ip_blacklist` 会被校验格式，必须是「合法 IP 或 CIDR」组成的 JSON 数组，否则返回 `400`
-> - `allow_origin`：逗号分隔的来源白名单；**留空表示不放开跨域**，填 `*` 表示允许任意来源。
+> - `allow_origin`：逗号分隔的来源白名单，同时承担两件事：① 决定 CORS 是否下发
+>   `Access-Control-Allow-Origin`（浏览器侧）；② **提交评论时的服务端来源校验**
+>   （`Origin` / `Referer` / `post_url` 三处存在的来源都必须命中，否则 `403 ORIGIN_NOT_ALLOWED`，
+>   且不落库、不发信）。**留空表示不放开跨域、同时不启用服务端校验**（行为与旧版本一致）；
+>   填 `*` 表示允许任意来源，同时关闭服务端校验。
+>   白名单条目可写完整来源或裸主机名（忽略 scheme 与端口），不支持通配符子域。
 >   管理接口使用 `Authorization: Bearer`，不依赖 Cookie 凭据，因此不会下发 `Access-Control-Allow-Credentials`
 > - `trust_proxy`：是否信任反向代理下发的客户端 IP 头（`cf-connecting-ip` / `x-real-ip` / `x-forwarded-for`）。
 >   默认 `"false"`，只使用 TCP 连接对端地址；部署在 Nginx / Cloudflare 之后时必须设为 `"true"`。

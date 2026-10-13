@@ -73,7 +73,7 @@
 | `comment_spam_max_links` | 链接数上限（默认 `0` = 不限制，建议 `3`）：正文链接 + 个人网址字段超过即判为垃圾 |
 | `comment_spam_min_length` | 正文最少字符数（默认 `0` = 不限制，建议 `5`），单位是 **Unicode 码点** |
 | `comment_spam_duplicate_window` | 重复内容检测时间窗（分钟，默认 `0` = 关闭，建议 `10`）：同一 IP 在窗口内提交完全相同正文即判为垃圾 |
-| `allow_origin` | 允许的跨域来源 |
+| `allow_origin` | 允许的来源白名单：同时用于 CORS 响应头与**提交评论的服务端来源校验**（`Origin`/`Referer`/`post_url` 都要命中，否则 403 且不落库不发信）；留空 = 不放开跨域且不校验，`*` = 允许任意来源 |
 | `ip_blacklist` | IP 黑名单（JSON 数组） |
 | `email_blacklist` | 邮箱黑名单（JSON 数组） |
 | `blogger_badge_enabled` | 是否启用博主标识 |

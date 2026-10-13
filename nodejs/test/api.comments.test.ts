@@ -50,6 +50,7 @@ const TOUCHED_SETTINGS = [
   "email_enabled",
   "site_name",
   "verify_base_url",
+  "allow_origin",
 ];
 
 function validBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -915,5 +916,162 @@ describe("POST /api/comments — 审核自动化（垃圾规则）", () => {
     );
     expect(res.status).toBe(200);
     expect(statusOf("/posts/spam-admin")).toBe("approved");
+  });
+});
+
+/**
+ * 服务端来源校验：allow_origin 配置成白名单后，写接口必须自己拦下白名单外的提交。
+ *
+ * 这里带上本地假 SMTP：CORS 时代对方站点即使被浏览器拦下响应，请求照样会落库并发信，
+ * 所以「被拒的请求不得落库、不得发信」是这道闸门的核心断言。
+ */
+describe("POST /api/comments — 服务端来源校验", () => {
+  const countOf = (slug: string) =>
+    (db.get(sql`SELECT COUNT(*) as count FROM "Comment" WHERE "post_slug" = ${slug}`) as any).count;
+
+  let smtp: FakeSmtp;
+
+  beforeAll(async () => {
+    smtp = await startFakeSmtp();
+  });
+
+  beforeEach(async () => {
+    await setSetting("smtp_host", "127.0.0.1");
+    await setSetting("smtp_port", String(smtp.port));
+    await setSetting("email_user", "sender@example.com");
+    await setSetting("email_password", "p");
+    await setSetting("email_secure", "false");
+    await setSetting("email_enabled", "true");
+    await setSetting("admin_email", "admin@example.com");
+  });
+
+  afterAll(async () => {
+    await smtp.close();
+  });
+
+  afterEach(() => {
+    smtp.reset();
+  });
+
+  it("Origin 在白名单内时正常提交", async () => {
+    await setSetting("allow_origin", "https://blog.example.com");
+
+    const res = await postComment(
+      validBody({ post_slug: "/posts/origin-ok", post_url: "https://blog.example.com/posts/demo" }),
+      uniqueIp(),
+      { origin: "https://blog.example.com" }
+    );
+
+    expect(res.status).toBe(200);
+    expect(countOf("/posts/origin-ok")).toBe(1);
+  });
+
+  it("Origin 不在白名单内时返回 403，且不落库、不发信", async () => {
+    await setSetting("allow_origin", "https://blog.example.com");
+
+    const res = await postComment(
+      validBody({ post_slug: "/posts/origin-denied", post_url: "https://luoxuedev.top/blog/aosp" }),
+      uniqueIp(),
+      { origin: "https://luoxuedev.top", referer: "https://luoxuedev.top/blog/aosp" }
+    );
+
+    expect(res.status).toBe(403);
+    const body = await json(res);
+    expect(body.code).toBe(403);
+    expect(body.reason).toBe("ORIGIN_NOT_ALLOWED");
+    expect(countOf("/posts/origin-denied")).toBe(0);
+    expect(smtp.messages).toHaveLength(0);
+  });
+
+  it("服务端转发（无 Origin/Referer，post_url 指向白名单站点）仍然放行", async () => {
+    await setSetting("allow_origin", "https://blog.example.com");
+
+    const res = await postComment(
+      validBody({ post_slug: "/posts/origin-proxy", post_url: "https://blog.example.com/posts/demo" })
+    );
+
+    expect(res.status).toBe(200);
+    expect(smtp.messages).toHaveLength(1);
+  });
+
+  it("服务端转发但 post_url 指向未授权站点时拒绝（本次事件形态）", async () => {
+    await setSetting("allow_origin", "https://blog.example.com");
+
+    const res = await postComment(
+      validBody({ post_slug: "/posts/origin-proxy-denied", post_url: "https://luoxuedev.top/blog/aosp" })
+    );
+
+    expect(res.status).toBe(403);
+    expect(countOf("/posts/origin-proxy-denied")).toBe(0);
+    expect(smtp.messages).toHaveLength(0);
+  });
+
+  it("三个来源都没有时拒绝", async () => {
+    await setSetting("allow_origin", "https://blog.example.com");
+
+    const res = await postComment(validBody({ post_slug: "/posts/origin-none" }));
+
+    expect(res.status).toBe(403);
+    expect(countOf("/posts/origin-none")).toBe(0);
+  });
+
+  it("Origin 命中但 post_url 指向别处时拒绝", async () => {
+    await setSetting("allow_origin", "https://blog.example.com");
+
+    const res = await postComment(
+      validBody({ post_slug: "/posts/origin-mixed", post_url: "https://evil.example/x" }),
+      uniqueIp(),
+      { origin: "https://blog.example.com" }
+    );
+
+    expect(res.status).toBe(403);
+    expect(countOf("/posts/origin-mixed")).toBe(0);
+  });
+
+  it("allow_origin 未配置时不启用服务端校验（行为与旧版本一致）", async () => {
+    const res = await postComment(validBody({ post_slug: "/posts/origin-off" }), uniqueIp(), {
+      origin: "https://anywhere.example",
+    });
+
+    expect(res.status).toBe(200);
+    expect(countOf("/posts/origin-off")).toBe(1);
+  });
+
+  it("allow_origin 为 * 时不启用服务端校验", async () => {
+    await setSetting("allow_origin", "*");
+
+    const res = await postComment(validBody({ post_slug: "/posts/origin-star" }), uniqueIp(), {
+      origin: "https://anywhere.example",
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("不带 scheme 的白名单条目按主机名匹配", async () => {
+    await setSetting("allow_origin", "blog.example.com");
+
+    const res = await postComment(validBody({ post_slug: "/posts/origin-host-only" }), uniqueIp(), {
+      origin: "https://blog.example.com",
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("来源校验早于限流：冷却期内的白名单外请求返回 403 而不是 429", async () => {
+    await setSetting("allow_origin", "https://blog.example.com");
+    const ip = uniqueIp();
+    seedComment({ post_slug: "/posts/origin-throttle", ip_address: ip, pub_date: Date.now() });
+
+    const denied = await postComment(validBody({ post_slug: "/posts/origin-throttle" }), ip, {
+      origin: "https://evil.example",
+    });
+    expect(denied.status).toBe(403);
+    expect((await json(denied)).reason).toBe("ORIGIN_NOT_ALLOWED");
+
+    // 白名单内来源才会走到限流，命中 60 秒冷却
+    const throttled = await postComment(validBody({ post_slug: "/posts/origin-throttle" }), ip, {
+      origin: "https://blog.example.com",
+    });
+    expect(throttled.status).toBe(429);
   });
 });

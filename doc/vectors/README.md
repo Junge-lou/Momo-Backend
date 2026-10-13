@@ -69,6 +69,29 @@ Worker `worker/test/unit/vectors.spam-v1.test.ts`。
 > 「同 IP 时间窗内重复内容」需要数据库查询，无法在纯函数向量里覆盖，
 > 由三端的接口/单元测试各自验证（`test/api.comments.test.ts`、`comment_test.go`、`test/api/comments.post.test.ts`）。
 
+### `origin-v1.json`
+
+评论提交的**服务端来源校验**（`Origin` / `Referer` / `post_url`）口径。
+
+背景：CORS 是浏览器机制，`allow_origin` 过去只决定要不要下发 `Access-Control-Allow-Origin`，
+对「对方站点在自己的服务器上转发请求」完全无效 —— 对方照样落库，还会用后端配置的 SMTP 账号发信。
+因此 `allow_origin` 非空且不含 `*` 时，写接口自己做一次来源校验。这份 fixture 覆盖：
+
+- **归一化**：scheme 与主机大小写、尾斜杠、路径/查询串/片段、默认端口（`http:80` / `https:443`）、
+  `userinfo` 丢弃、IPv6 字面量（`[::1]`），以及各类畸形输入（`Origin: null`、端口 `0`/前导零/越界、
+  裸 IPv6、非 ASCII 主机名）的 fail-closed 结果；
+- **白名单条目**：完整来源与裸主机名（忽略 scheme 与端口）两种写法，不支持通配符子域，
+  条目解析失败即丢弃（全部非法时等价于「全部拒绝」）；
+- **判定优先级**：白名单未启用（空配置 / `*`）→ `skip`；任一来源不可解析 → `deny:invalid_source`；
+  无来源 → `deny:no_source`；任一来源不命中 → `deny:not_allowed`；全部命中 → `allow`；
+- **真实场景**：浏览器直连（`Origin` 命中）、服务端转发（只有 `post_url`），
+  以及「`post_url` 指向未授权站点」这种被滥用的形态。
+
+三端各自复算：Node `nodejs/test/vectors.origin-v1.test.ts`、Go `go/internal/pkg/utils/origin_vectors_test.go`、
+Worker `worker/test/unit/vectors.origin-v1.test.ts`；接口层的「403 不落库、不发信」由
+`nodejs/test/api.comments.test.ts`、`go/internal/handler/http/comment_test.go`、
+`worker/test/api/comments.post.test.ts` 各自验证（Node/Worker 用假 SMTP 断言零发信）。
+
 ## 重新生成
 
 **只有在有意修改协议时才需要重新生成**，并且必须同步更新所有语言的测试与 `doc/api.md`：

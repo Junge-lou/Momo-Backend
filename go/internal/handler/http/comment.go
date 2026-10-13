@@ -61,6 +61,26 @@ func (h *CommentHandler) PostComment(c *gin.Context) {
 		return
 	}
 
+	// 服务端来源校验：CORS 只是浏览器机制，挡不住「对方站点在自己的服务端转发」。
+	// allow_origin 配置成白名单（非空且不含 *）时，写接口只接受来自白名单的提交请求；
+	// 判定必须早于限流 / 黑名单 / 人机验证与**一切发信路径**（验证邮件、站长通知、回复通知），
+	// 否则白名单外的站点照样能借本站 SMTP 发信。口径见 doc/vectors/origin-v1.json。
+	sourceDecision := utils.CheckRequestSource(utils.RequestSourceInput{
+		AllowOrigin: utils.GetSetting("allow_origin"),
+		Origin:      c.GetHeader("Origin"),
+		Referer:     c.GetHeader("Referer"),
+		PostURL:     req.PostURL,
+	})
+	if utils.IsSourceDenied(sourceDecision) {
+		log.Printf("[security] 拒绝来源未授权的评论提交：%s %s", sourceDecision, req.PostSlug)
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+			"reason":  "ORIGIN_NOT_ALLOWED",
+		})
+		return
+	}
+
 	// 1. 获取并解析 User-Agent
 	uaString := c.GetHeader("User-Agent")
 	var deviceStr, browserStr, osStr string

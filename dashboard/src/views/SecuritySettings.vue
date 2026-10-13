@@ -23,7 +23,7 @@
         <h2 class="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
           <i class="fa-solid fa-earth-americas text-orange-500"></i> 跨域设置 (CORS)
         </h2>
-        <p class="text-sm text-gray-500 mb-4">设置允许访问 API 的跨域来源，多个域名用逗号分隔。</p>
+        <p class="text-sm text-gray-500 mb-4">设置允许调用 API 的来源白名单，多个域名用逗号分隔。白名单同时用于 CORS 响应头与<b>提交评论的服务端来源校验</b>：白名单外的站点提交评论会被 403 拒绝（不落库、不发信）。留空表示不放开跨域、也不启用该校验；填 <code>*</code> 表示允许任意来源。</p>
         <div class="flex flex-wrap gap-2 mb-2 min-h-[28px]">
           <span v-for="(origin, index) in originList" :key="index"
             class="inline-flex items-center gap-1 px-3 py-1 bg-orange-50 border border-orange-200 text-orange-700 rounded-full text-sm">

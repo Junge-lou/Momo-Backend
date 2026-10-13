@@ -836,3 +836,135 @@ describe('POST /api/comments —— 审核自动化（垃圾规则）', () => {
 		expect(await statusOfLatest()).toBe('approved');
 	});
 });
+
+/**
+ * 服务端来源校验：allow_origin 配置成白名单后，写接口必须自己拦下白名单外的提交。
+ *
+ * 这里刻意带上 SMTP 配置：CORS 时代对方站点即使被浏览器拦下响应，请求照样会落库并发信，
+ * 所以「被拒的请求不得落库、不得发信」是这道闸门的核心断言。
+ */
+describe('POST /api/comments —— 服务端来源校验', () => {
+	it('Origin 在白名单内时正常提交', async () => {
+		await seedSettings({ ...SMTP, allow_origin: 'https://blog.example.com' });
+
+		const res = await postComment({ post_url: 'https://blog.example.com/posts/demo' }, '203.0.113.130', {
+			Origin: 'https://blog.example.com',
+		});
+
+		expect(res.status).toBe(200);
+		expect(await lastCommentId()).not.toBeNull();
+	});
+
+	it('Origin 不在白名单内时返回 403，且不落库、不发信', async () => {
+		await seedSettings({ ...SMTP, allow_origin: 'https://blog.example.com' });
+
+		const res = await postComment({ post_url: 'https://luoxuedev.top/blog/aosp' }, '203.0.113.131', {
+			Origin: 'https://luoxuedev.top',
+			Referer: 'https://luoxuedev.top/blog/aosp',
+		});
+
+		expect(res.status).toBe(403);
+		expect(res.body.code).toBe(403);
+		expect(res.body.reason).toBe('ORIGIN_NOT_ALLOWED');
+		expect(await lastCommentId()).toBeNull();
+		expect(sentMails).toHaveLength(0);
+	});
+
+	it('服务端转发（无 Origin/Referer，post_url 指向白名单站点）仍然放行', async () => {
+		await seedSettings({ ...SMTP, allow_origin: 'https://blog.example.com' });
+
+		const res = await postComment({ post_url: 'https://blog.example.com/posts/demo' }, '203.0.113.132');
+
+		expect(res.status).toBe(200);
+		expect(sentMails).toHaveLength(1);
+	});
+
+	it('服务端转发但 post_url 指向未授权站点时拒绝（本次事件形态）', async () => {
+		await seedSettings({ ...SMTP, allow_origin: 'https://blog.example.com' });
+
+		const res = await postComment({ post_url: 'https://luoxuedev.top/blog/aosp' }, '203.0.113.133');
+
+		expect(res.status).toBe(403);
+		expect(await lastCommentId()).toBeNull();
+		expect(sentMails).toHaveLength(0);
+	});
+
+	it('三个来源都没有时拒绝', async () => {
+		await seedSettings({ ...SMTP, allow_origin: 'https://blog.example.com' });
+
+		const res = await postComment({}, '203.0.113.134');
+
+		expect(res.status).toBe(403);
+		expect(await lastCommentId()).toBeNull();
+	});
+
+	it('Origin 命中但 post_url 指向别处时拒绝', async () => {
+		await seedSettings({ ...SMTP, allow_origin: 'https://blog.example.com' });
+
+		const res = await postComment({ post_url: 'https://evil.example/x' }, '203.0.113.135', {
+			Origin: 'https://blog.example.com',
+		});
+
+		expect(res.status).toBe(403);
+		expect(await lastCommentId()).toBeNull();
+	});
+
+	it('被拒的请求不会触发邮箱验证邮件', async () => {
+		await seedSettings({
+			...SMTP_ONLY,
+			allow_origin: 'https://blog.example.com',
+			email_verify_enabled: 'true',
+		});
+
+		const res = await postComment({ post_url: 'https://luoxuedev.top/blog/aosp' }, '203.0.113.136');
+
+		expect(res.status).toBe(403);
+		expect(sentMails).toHaveLength(0);
+	});
+
+	it('allow_origin 未配置时不启用服务端校验（行为与旧版本一致）', async () => {
+		await seedSettings({ ...SMTP });
+
+		const res = await postComment({}, '203.0.113.137', { Origin: 'https://anywhere.example' });
+
+		expect(res.status).toBe(200);
+		expect(await lastCommentId()).not.toBeNull();
+	});
+
+	it('allow_origin 为 * 时不启用服务端校验', async () => {
+		await seedSettings({ ...SMTP, allow_origin: '*' });
+
+		const res = await postComment({}, '203.0.113.138', { Origin: 'https://anywhere.example' });
+
+		expect(res.status).toBe(200);
+	});
+
+	it('不带 scheme 的白名单条目按主机名匹配', async () => {
+		await seedSettings({ ...SMTP, allow_origin: 'blog.example.com' });
+
+		const res = await postComment({}, '203.0.113.139', { Origin: 'https://blog.example.com' });
+
+		expect(res.status).toBe(200);
+	});
+
+	it('来源校验早于限流与人机验证', async () => {
+		await seedSettings({
+			...SMTP,
+			allow_origin: 'https://blog.example.com',
+			comment_verify_enabled: 'true',
+		});
+
+		const ip = '203.0.113.140';
+		// 造一条刚写入的评论，让该 IP 处于 60 秒冷却内
+		await seedComment({ ip_address: ip, pub_date: Date.now() });
+
+		// 白名单外来源：应当先被判 403 ORIGIN_NOT_ALLOWED，而不是 429 或 VERIFY_REQUIRED
+		const denied = await postComment({}, ip, { Origin: 'https://evil.example' });
+		expect(denied.status).toBe(403);
+		expect(denied.body.reason).toBe('ORIGIN_NOT_ALLOWED');
+
+		// 白名单内来源：此时才会走到限流，应命中 60 秒冷却
+		const throttled = await postComment({}, ip, { Origin: 'https://blog.example.com' });
+		expect(throttled.status).toBe(429);
+	});
+});

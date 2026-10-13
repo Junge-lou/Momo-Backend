@@ -6,6 +6,7 @@ import { CreateCommentInput } from "../../type/prisma";
 import { sendCommentReplyNotification, sendCommentNotification, isEmailServiceAvailable, checkEmailVerified, saveVerificationToken, hasUnverifiedToken, sendVerificationEmail } from "../../utils/email";
 import { canPostComment, checkContent, countCodePoints, MAX_POST_SLUG, sanitizePostSlug, sanitizeHtml, sanitizeUrl, checkIpBlacklist, checkEmailBlacklist, getCommentStatus } from "../../utils/security";
 import { checkCommentSpam } from "../../utils/spam";
+import { checkRequestSource, isSourceDenied } from "../../utils/origin";
 import { getSetting } from "../../utils/settings";
 import { isVerifyEnabled, verifyTicket } from "../../utils/verify";
 import { parseMarkdown } from "../../utils/markdown";
@@ -55,6 +56,28 @@ export default async (c: Context): Promise<Response> => {
           message: `Field too long (content ≤ ${MAX_CONTENT}, author ≤ ${MAX_AUTHOR}, email ≤ ${MAX_EMAIL}, url ≤ ${MAX_URL}, post_slug ≤ ${MAX_POST_SLUG})`,
         },
         400
+      );
+    }
+
+    // 服务端来源校验：CORS 只是浏览器机制，挡不住「对方站点在自己的服务端转发」。
+    // allow_origin 配置成白名单（非空且不含 *）时，写接口只接受来自白名单的提交请求；
+    // 判定必须早于限流 / 黑名单 / 人机验证与**一切发信路径**（验证邮件、站长通知、回复通知），
+    // 否则白名单外的站点照样能借本站 SMTP 发信。口径见 doc/vectors/origin-v1.json。
+    const sourceDecision = checkRequestSource({
+      allowOrigin: await getSetting("allow_origin"),
+      origin: c.req.header("origin"),
+      referer: c.req.header("referer"),
+      postUrl: data.post_url,
+    });
+    if (isSourceDenied(sourceDecision)) {
+      LogService.warn("拒绝来源未授权的评论提交", { decision: sourceDecision, post_slug: data.post_slug });
+      return c.json(
+        {
+          code: 403,
+          message: "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+          reason: "ORIGIN_NOT_ALLOWED",
+        },
+        403
       );
     }
 
