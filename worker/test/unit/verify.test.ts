@@ -19,10 +19,12 @@ import { createSchema, rawSettings, seedSettings, testEnv } from '../helpers/db'
 import {
 	TICKET_TTL_SECONDS,
 	VERIFY_PROTOCOL_VERSION,
+	checkVerifyDomain,
 	createChallenge,
 	createTicket,
 	getDifficulty,
 	getPublicVerifyConfig,
+	isDomainLockEnabled,
 	isInstrumentationEnabled,
 	isVerifyEnabled,
 	shouldBlockAutomated,
@@ -33,6 +35,7 @@ import { createInstrumentationChallenge, interpretProgram } from '../../src/util
 import {
 	fromBase64url,
 	hashVerifyIp,
+	hashVerifyOrigin,
 	hmacSHA256,
 	honeypotFieldName,
 	toBase64url,
@@ -75,7 +78,15 @@ async function craftPrefix(payload: unknown): Promise<{ prefix: string; sig: str
 	return { prefix, sig: await hmacSHA256(prefix, SECRET) };
 }
 
-function decodePrefix(prefix: string): { v: number; cid: string; iph: string; slug: string; iat: number } {
+function decodePrefix(prefix: string): {
+	v: number;
+	cid: string;
+	iph: string;
+	slug: string;
+	iat: number;
+	/** 仅开启 comment_verify_domain_enabled 时存在 */
+	org?: string;
+} {
 	return JSON.parse(new TextDecoder().decode(fromBase64url(prefix)));
 }
 
@@ -1029,5 +1040,219 @@ describe('createTicket / verifyTicket（协议 v2）', () => {
 		} finally {
 			spy.mockRestore();
 		}
+	});
+});
+
+/* ------------------------------------------------------------------ *
+ * 来源域名绑定（comment_verify_domain_enabled）
+ *
+ * 与普通的来源校验共用 allow_origin 白名单，但两个语义差异必须钉住：
+ *  - 白名单不可用（空 / 空白 / `*`）时 **fail-closed**，而不是像写接口那样跳过；
+ *  - 来源哈希被签进挑战与票据，A 域名签发的凭证不能在 B 域名兑换。
+ * ------------------------------------------------------------------ */
+
+const BLOG_ORIGIN = 'https://blog.example.com';
+const OTHER_ORIGIN = 'https://www.example.com';
+
+describe('checkVerifyDomain —— 设置项驱动的域名绑定判定', () => {
+	it('默认（未配置）关闭：ok 恒为 true，其余字段为占位值', async () => {
+		expect(await isDomainLockEnabled(bindings)).toBe(false);
+		expect(
+			await checkVerifyDomain(bindings, { origin: BLOG_ORIGIN, postUrl: `${BLOG_ORIGIN}${SLUG}` })
+		).toEqual({ enabled: false, ok: true, origin: '', decision: 'disabled', orgHash: '' });
+	});
+
+	it('仅字符串 "true" 视为开启', async () => {
+		for (const value of ['TRUE', '1', '', 'yes']) {
+			await seedSettings({ comment_verify_domain_enabled: value });
+			expect(await isDomainLockEnabled(bindings)).toBe(false);
+		}
+		await seedSettings({ comment_verify_domain_enabled: 'true' });
+		expect(await isDomainLockEnabled(bindings)).toBe(true);
+	});
+
+	it('开启但白名单不可用：fail-closed（deny:no_whitelist），仍给出观测来源与其哈希', async () => {
+		await seedSettings({ comment_verify_domain_enabled: 'true' });
+
+		for (const allowOrigin of ['', '   ', '*']) {
+			await seedSettings({ allow_origin: allowOrigin });
+			expect(await checkVerifyDomain(bindings, { origin: BLOG_ORIGIN })).toEqual({
+				enabled: true,
+				ok: false,
+				origin: BLOG_ORIGIN,
+				decision: 'deny:no_whitelist',
+				orgHash: await hashVerifyOrigin(BLOG_ORIGIN, SECRET),
+			});
+		}
+	});
+
+	it('开启且命中白名单：ok 为 true 并给出归一化来源与哈希', async () => {
+		await seedSettings({
+			comment_verify_domain_enabled: 'true',
+			allow_origin: `${BLOG_ORIGIN},${OTHER_ORIGIN}`,
+		});
+
+		const result = await checkVerifyDomain(bindings, {
+			origin: BLOG_ORIGIN,
+			referer: `${BLOG_ORIGIN}${SLUG}`,
+			postUrl: `${BLOG_ORIGIN}${SLUG}`,
+		});
+		expect(result.enabled).toBe(true);
+		expect(result.ok).toBe(true);
+		expect(result.decision).toBe('allow');
+		expect(result.origin).toBe(BLOG_ORIGIN);
+		expect(result.orgHash).toBe(await hashVerifyOrigin(BLOG_ORIGIN, SECRET));
+	});
+
+	it('开启但来源不在白名单：被拒时保留观测来源（排查哪个域名在试）', async () => {
+		await seedSettings({
+			comment_verify_domain_enabled: 'true',
+			allow_origin: BLOG_ORIGIN,
+		});
+
+		const result = await checkVerifyDomain(bindings, { origin: OTHER_ORIGIN });
+		expect(result.ok).toBe(false);
+		expect(result.decision).toBe('deny:not_allowed');
+		expect(result.origin).toBe(OTHER_ORIGIN);
+		expect(result.orgHash).toBe(await hashVerifyOrigin(OTHER_ORIGIN, SECRET));
+	});
+
+	it('无任何来源时没有可绑定的域名（orgHash 为空串）', async () => {
+		await seedSettings({
+			comment_verify_domain_enabled: 'true',
+			allow_origin: BLOG_ORIGIN,
+		});
+
+		expect(await checkVerifyDomain(bindings, {})).toEqual({
+			enabled: true,
+			ok: false,
+			origin: '',
+			decision: 'deny:no_source',
+			orgHash: '',
+		});
+	});
+});
+
+describe('verifySolution —— 来源域名绑定', () => {
+	it('开启时缺 org 的旧挑战返回 domain required', async () => {
+		await enableVerify();
+		// 关闭状态下签发：载荷里没有 org
+		const challenge = await createChallenge(bindings, IP, SLUG);
+		expect(decodePrefix(challenge.prefix)).not.toHaveProperty('org');
+
+		// 开关中途打开后，用同一域名兑换 —— 旧挑战没有 org，必须被拒
+		expect(
+			await verifySolution(bindings, {
+				prefix: challenge.prefix,
+				sig: challenge.sig,
+				nonces: await solve(challenge.pow),
+				elapsedMs: 500,
+				ip: IP,
+				postSlug: SLUG,
+				orgHash: await hashVerifyOrigin(BLOG_ORIGIN, SECRET),
+			})
+		).toEqual({ ok: false, reason: 'domain required' });
+	});
+
+	it('为 A 域名签发的挑战在 B 域名兑换返回 domain mismatch，且不消耗挑战', async () => {
+		await enableVerify();
+		const orgA = await hashVerifyOrigin(BLOG_ORIGIN, SECRET);
+		const orgB = await hashVerifyOrigin(OTHER_ORIGIN, SECRET);
+		const challenge = await createChallenge(bindings, IP, SLUG, orgA);
+		expect(decodePrefix(challenge.prefix).org).toBe(orgA);
+
+		const nonces = await solve(challenge.pow);
+		const base = { prefix: challenge.prefix, sig: challenge.sig, nonces, elapsedMs: 500, ip: IP, postSlug: SLUG };
+
+		// 关键：域名不匹配不得写入已用集合（否则真人在正确域名下重试会被判「已使用」）
+		expect(await verifySolution(bindings, { ...base, orgHash: orgB })).toEqual({
+			ok: false,
+			reason: 'domain mismatch',
+		});
+		expect(await verifySolution(bindings, { ...base, orgHash: orgA })).toEqual({ ok: true });
+	});
+
+	it('org 存在但不是字符串时按畸形载荷拒绝（不伪装成 domain mismatch）', async () => {
+		await enableVerify();
+		const challenge = await createChallenge(bindings, IP, SLUG);
+		const payload = decodePrefix(challenge.prefix) as Record<string, unknown>;
+		const forged = await craftPrefix({ ...payload, org: 123 });
+
+		expect(
+			await verifySolution(bindings, {
+				...forged,
+				nonces: await solve(challenge.pow),
+				elapsedMs: 500,
+				ip: IP,
+				postSlug: SLUG,
+				orgHash: await hashVerifyOrigin(BLOG_ORIGIN, SECRET),
+			})
+		).toEqual({ ok: false, reason: 'malformed payload' });
+	});
+
+	it('未开启域名绑定时忽略载荷里的 org（形状与旧版一致的挑战照常兑换）', async () => {
+		await enableVerify();
+		const challenge = await createChallenge(bindings, IP, SLUG);
+		expect(
+			await verifySolution(bindings, {
+				prefix: challenge.prefix,
+				sig: challenge.sig,
+				nonces: await solve(challenge.pow),
+				elapsedMs: 500,
+				ip: IP,
+				postSlug: SLUG,
+			})
+		).toEqual({ ok: true });
+	});
+});
+
+describe('verifyTicket —— 来源域名绑定', () => {
+	it('开启时同域票据通过，跨域票据一律 false', async () => {
+		const orgA = await hashVerifyOrigin(BLOG_ORIGIN, SECRET);
+		const orgB = await hashVerifyOrigin(OTHER_ORIGIN, SECRET);
+
+		const ticket = await createTicket(bindings, IP, SLUG, orgA);
+		expect(await verifyTicket(bindings, ticket, IP, SLUG, orgA)).toBe(true);
+		expect(await verifyTicket(bindings, ticket, IP, SLUG, orgB)).toBe(false);
+	});
+
+	it('开启时没有 org 的旧票据 false（触发前端重新验证）', async () => {
+		const orgA = await hashVerifyOrigin(BLOG_ORIGIN, SECRET);
+		const legacy = await createTicket(bindings, IP, SLUG);
+		expect(await verifyTicket(bindings, legacy, IP, SLUG, orgA)).toBe(false);
+	});
+
+	it('票据载荷里的 org 必须是字符串，否则 false', async () => {
+		const now = Date.now();
+		const body = toBase64url(
+			JSON.stringify({
+				v: 2,
+				iph: await hashVerifyIp(IP, SECRET),
+				slug: SLUG,
+				iat: now,
+				exp: now + 300000,
+				jti: 'bad-org',
+				org: 123,
+			})
+		);
+		const ticket = `${body}.${await hmacSHA256(body, SECRET)}`;
+		expect(await verifyTicket(bindings, ticket, IP, SLUG, await hashVerifyOrigin(BLOG_ORIGIN, SECRET))).toBe(
+			false
+		);
+	});
+
+	it('未开启域名绑定时 orgHash 为空串：载荷里的 org 被忽略（向后兼容）', async () => {
+		const orgA = await hashVerifyOrigin(BLOG_ORIGIN, SECRET);
+		const ticket = await createTicket(bindings, IP, SLUG, orgA);
+		expect(await verifyTicket(bindings, ticket, IP, SLUG)).toBe(true);
+	});
+
+	it('域名校验排在 slug 之后、IP 之前（等价输入下不改变既有拒绝语义）', async () => {
+		const orgA = await hashVerifyOrigin(BLOG_ORIGIN, SECRET);
+		const ticket = await createTicket(bindings, IP, SLUG, orgA);
+
+		// slug 不匹配与 IP 不匹配的既有行为不受域名绑定影响
+		expect(await verifyTicket(bindings, ticket, IP, '/posts/other', orgA)).toBe(false);
+		expect(await verifyTicket(bindings, ticket, OTHER_IP, SLUG, orgA)).toBe(false);
 	});
 });

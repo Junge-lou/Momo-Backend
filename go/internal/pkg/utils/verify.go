@@ -46,6 +46,8 @@ const (
 	settingVerifySecret         = "comment_verify_secret"
 	settingVerifyInstrEnabled   = "comment_verify_instr_enabled"
 	settingVerifyBlockAutomated = "comment_verify_block_automated"
+	// settingVerifyDomainEnabled 来源域名绑定（复用 allow_origin 白名单）
+	settingVerifyDomainEnabled = "comment_verify_domain_enabled"
 
 	// defaultVerifyDifficulty 难度：总期望哈希次数
 	defaultVerifyDifficulty = HashwxDefaultDifficulty
@@ -157,6 +159,63 @@ func ShouldBlockAutomated() bool {
 	return GetSetting(settingVerifyBlockAutomated) == "true"
 }
 
+// IsDomainLockEnabled 是否开启「来源域名绑定」，**默认关闭**。
+//
+// 开启后：挑战签发、答案兑换、评论提交三处都要求请求来源命中 allow_origin 白名单
+// （白名单不可用时 fail-closed），并把来源哈希签进挑战与票据 —— 为 A 域名签发的凭证
+// 无法在 B 域名使用，纯浏览器侧的跨域调用也彻底走不通（页面无法伪造 Origin）。
+func IsDomainLockEnabled() bool {
+	return GetSetting(settingVerifyDomainEnabled) == "true"
+}
+
+// DomainCheckResult 一次「来源域名绑定」判定的结果
+type DomainCheckResult struct {
+	// Enabled 是否开启了域名绑定（关闭时 OK 恒为 true，其余字段为占位值）
+	Enabled bool
+	OK      bool
+	// Origin 归一化来源（被拒时尽量给出，便于日志与认证记录）
+	Origin string
+	// Decision 为 disabled / allow / deny:*
+	Decision string
+	// OrgHash 归一化来源的加盐哈希；未开启或来源不可判定时为空串
+	OrgHash string
+}
+
+// CheckVerifyDomain 按设置项做一次「来源域名绑定」判定（三端一致）。
+//
+// 调用方拿到 OK == false 时必须直接拒绝（403），不要继续签发挑战或兑换票据。
+func CheckVerifyDomain(origin, referer, postURL string) DomainCheckResult {
+	if !IsDomainLockEnabled() {
+		return DomainCheckResult{Enabled: false, OK: true, Decision: DomainLockDecisionDisabled}
+	}
+
+	input := RequestSourceInput{
+		AllowOrigin: GetSetting("allow_origin"),
+		Origin:      origin,
+		Referer:     referer,
+		PostURL:     postURL,
+	}
+	result := CheckDomainLock(input)
+
+	observed := PickBoundOrigin(input)
+	observedOrigin := ""
+	if observed != nil {
+		observedOrigin = observed.Origin
+	}
+	orgHash := ""
+	if observedOrigin != "" {
+		orgHash = hashOrigin(observedOrigin, getVerifySecret())
+	}
+
+	return DomainCheckResult{
+		Enabled:  true,
+		OK:       result.OK,
+		Origin:   observedOrigin,
+		Decision: result.Decision,
+		OrgHash:  orgHash,
+	}
+}
+
 // parseIntJS 复刻 JavaScript 的 parseInt(raw, 10)：
 // 跳过前导空白，接受可选正负号，只取十进制数字前缀；没有数字则为 NaN。
 func parseIntJS(raw string) (float64, bool) {
@@ -205,6 +264,14 @@ func hashVerifyIP(ip, secret string) string {
 	return sha256Hex("ip:" + secret + ":" + ip)[:16]
 }
 
+// hashOrigin 来源域名加盐哈希，用于把挑战/票据绑定到签发它的站点域名。
+//
+// 与 hashVerifyIP 同构：SHA256("org:" + secret + ":" + 归一化来源) 取前 16 位十六进制。
+// 三端必须完全一致（doc/vectors/verify-v2.json 的 originHash）。
+func hashOrigin(origin, secret string) string {
+	return sha256Hex("org:" + secret + ":" + origin)[:16]
+}
+
 // honeypotFieldName 按文章派生的蜜罐字段名
 func honeypotFieldName(postSlug, secret string) string {
 	return "v_" + sha256Hex("hp:" + secret + ":" + postSlug)[:10]
@@ -241,6 +308,23 @@ type verifyChallengePayload struct {
 	Iph  string `json:"iph"`
 	Slug string `json:"slug"`
 	Iat  *int64 `json:"iat"`
+	// Org 来源域名哈希（可选，仅 comment_verify_domain_enabled 为 true 时存在）。
+	//
+	// 必须追加在**末尾**：前面的字段顺序是三端共用的签名口径，插在中间会让新旧载荷互不认可。
+	// 兑换时用「本次请求观测到的来源」重新计算并要求常数时间相等 —— 为 A 域名签发的挑战
+	// 无法在 B 域名兑换。用 omitempty 保证未开启时整个字段缺席，形状与旧版本完全一致。
+	Org string `json:"org,omitempty"`
+}
+
+// firstOrgHash 取可选的来源域名哈希。
+//
+// Node 侧形参写作 `orgHash = ""`（可选、默认空串），Go 用变长参数表达同一语义，
+// 既保留旧调用点，也允许多传时以第一个为准。
+func firstOrgHash(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 // VerifyPowSpec HashWX 挑战参数（响应里的 pow 字段）
@@ -285,7 +369,9 @@ func buildHashwxSpec(challengeID, secret string) (HashwxSpec, error) {
 //
 // postSlug 必须与调用方在提交答案时传给 VerifySolution 的完全一致（同一套净化规则），
 // 因为挑战被签名绑定到这篇文章，只有同一篇文章才能兑换票据。
-func CreateVerifyChallenge(ip, postSlug string) (*VerifyChallenge, error) {
+//
+// orgHash 为空串表示未开启域名绑定（载荷里不出现 org 字段，形状与旧版本完全一致）。
+func CreateVerifyChallenge(ip, postSlug string, orgHash ...string) (*VerifyChallenge, error) {
 	secret := getVerifySecret()
 
 	random := make([]byte, 16)
@@ -300,6 +386,9 @@ func CreateVerifyChallenge(ip, postSlug string) (*VerifyChallenge, error) {
 		Iph:  hashVerifyIP(ip, secret),
 		Slug: postSlug,
 		Iat:  &iat,
+	}
+	if org := firstOrgHash(orgHash); org != "" {
+		payload.Org = org
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -357,6 +446,8 @@ type VerifySolutionInput struct {
 	IP        string
 	// PostSlug 本次提交声明的文章，必须与挑战签发时签进载荷的 slug 一致
 	PostSlug string
+	// OrgHash 本次请求观测到的来源域名哈希；空串表示未开启域名绑定
+	OrgHash string
 	// Instr 第二层答案：{ regs, env, lw, lh, tm }；开启第二层时必填
 	Instr map[string]any
 }
@@ -395,12 +486,12 @@ func jsNumber(raw json.RawMessage) (float64, bool) {
 }
 
 // VerifySolution 校验挑战答案
-// （签名 + 协议版本 + 文章绑定 + 时效 + IP 绑定 + 时序 + HashWX + 第二层 + 防重放）
+// （签名 + 协议版本 + 文章绑定 + 来源域名 + 时效 + IP 绑定 + 时序 + HashWX + 第二层 + 防重放）
 //
 // 校验顺序与 Node 的 verifySolution 逐条一致 —— 顺序决定了返回的 reason，
 // 客户端与跨语言测试都依赖它：
 //  1. 签名 2. 解析 JSON 3. 必须是对象 4. 协议版本 5. 字段形状
-//  6. 文章绑定 7. 时效 8. IP 绑定 9. 时序下限
+//  6. 文章绑定 6.5 来源域名绑定 7. 时效 8. IP 绑定 9. 时序下限
 //  10. HashWX spec 派生（读设置项，不能放进临界区）
 //  11. 防重放 + 工作量校验 + 标记已用（同一段同步临界区）
 //  12. 第二层 Instrumentation（在挑战标记为已用之后）
@@ -461,11 +552,32 @@ func VerifySolution(input VerifySolutionInput) (bool, string) {
 	if !cidOK || !iphOK || !slugOK || !iatOK {
 		return false, "malformed payload"
 	}
+	// org 是可选的：未开启域名绑定时整个字段缺席。出现了就必须是字符串，
+	// 否则视为畸形载荷（而不是退化成「域名不匹配」，那样会掩盖实现缺陷）。
+	if value, exists := fields["org"]; exists {
+		if _, isString := value.(string); !isString {
+			return false, "malformed payload"
+		}
+	}
 
 	// 6. 文章绑定：挑战只能兑换签发它的那篇文章的票据。
 	//    给出专属 reason 而不是含糊的算力不足，便于排障与前端提示。
 	if !constantTimeEqual(slug, input.PostSlug) {
 		return false, "slug mismatch"
+	}
+
+	// 6.5 来源域名绑定（仅开启 comment_verify_domain_enabled 时生效）。
+	//     两个专属 reason 分开：domain required 说明挑战签发时该开关还没开（重新验证即可），
+	//     domain mismatch 说明有人拿别的域名的挑战来兑换。
+	//     这一步在防重放的临界区**之前**：域名不匹配不得消耗挑战。
+	if input.OrgHash != "" {
+		org, orgOK := fields["org"].(string)
+		if !orgOK || org == "" {
+			return false, "domain required"
+		}
+		if !constantTimeEqual(org, input.OrgHash) {
+			return false, "domain mismatch"
+		}
 	}
 
 	// 7. 时效
@@ -538,7 +650,7 @@ func VerifySolution(input VerifySolutionInput) (bool, string) {
 
 // ---------- 票据 ----------
 
-// verifyTicketPayload 票据载荷，字段顺序固定为 v / iph / slug / iat / exp / jti
+// verifyTicketPayload 票据载荷，字段顺序固定为 v / iph / slug / iat / exp / jti / org
 type verifyTicketPayload struct {
 	V    int    `json:"v"`
 	Iph  string `json:"iph"`
@@ -546,10 +658,17 @@ type verifyTicketPayload struct {
 	Iat  int64  `json:"iat"`
 	Exp  int64  `json:"exp"`
 	Jti  string `json:"jti"`
+	// Org 来源域名哈希（可选，仅 comment_verify_domain_enabled 为 true 时存在）。
+	//
+	// 与挑战同构、同样追加在末尾：票据也只能在签发它的域名下使用，
+	// 这样 挑战 → 票据 → 评论提交 是**同一条域名链**。
+	Org string `json:"org,omitempty"`
 }
 
-// CreateVerifyTicket 签发通过验证的票据
-func CreateVerifyTicket(ip, postSlug string) (string, error) {
+// CreateVerifyTicket 签发通过验证的票据。
+//
+// orgHash 为空串表示未开启域名绑定（载荷里不出现 org 字段）。
+func CreateVerifyTicket(ip, postSlug string, orgHash ...string) (string, error) {
 	secret := getVerifySecret()
 
 	random := make([]byte, 8)
@@ -566,6 +685,9 @@ func CreateVerifyTicket(ip, postSlug string) (string, error) {
 		Exp:  now + int64(ticketTTL/time.Millisecond),
 		Jti:  b64urlEncode(random),
 	}
+	if org := firstOrgHash(orgHash); org != "" {
+		payload.Org = org
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -575,8 +697,11 @@ func CreateVerifyTicket(ip, postSlug string) (string, error) {
 	return body + "." + hmacSHA256(body, secret), nil
 }
 
-// VerifyTicket 校验票据（供提交评论时调用）
-func VerifyTicket(ticket, ip, postSlug string) bool {
+// VerifyTicket 校验票据（供提交评论时调用）。
+//
+// orgHash 为空串表示未开启域名绑定；开启时必须同时满足「票据里有 org」且
+// 「与本次请求的来源一致」，否则一律 false。
+func VerifyTicket(ticket, ip, postSlug string, orgHash ...string) bool {
 	if ticket == "" {
 		return false
 	}
@@ -611,6 +736,18 @@ func VerifyTicket(ticket, ip, postSlug string) bool {
 	if payload.Slug != postSlug {
 		return false
 	}
+
+	// 域名绑定：开启时必须同时满足「票据里有 org」且「与本次请求的来源一致」。
+	// 票据只在签发它的域名下可用；开关刚打开时旧票据没有 org，会被判失败并触发前端重新验证。
+	if org := firstOrgHash(orgHash); org != "" {
+		if payload.Org == "" {
+			return false
+		}
+		if !constantTimeEqual(payload.Org, org) {
+			return false
+		}
+	}
+
 	if !constantTimeEqual(hashVerifyIP(ip, secret), payload.Iph) {
 		return false
 	}

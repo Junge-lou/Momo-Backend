@@ -29,6 +29,8 @@ const JTI = "dGVzdC1qdGk";
 const CID = "dmVjdG9yLTE";
 /** 该难度下按 count=4 均分得到 d=250 */
 const DIFFICULTY = 1000;
+/** 来源域名绑定的固定来源（comment_verify_domain_enabled 开启时才会进入载荷） */
+const ORIGIN = "https://blog.example.com";
 
 function b64url(input: Buffer | string): string {
   const buf = typeof input === "string" ? Buffer.from(input, "utf8") : input;
@@ -43,11 +45,25 @@ function sha256Hex(data: string): string {
   return crypto.createHash("sha256").update(data, "utf8").digest("hex");
 }
 
-// ---- 挑战载荷：字段顺序固定为 v / cid / iph / slug / iat ----
+// ---- 挑战载荷：字段顺序固定为 v / cid / iph / slug / iat（可选 org 追加在末尾）----
 const ipHash = sha256Hex(`ip:${SECRET}:${IP}`).slice(0, 16);
 const challengePayloadJson = JSON.stringify({ v: 2, cid: CID, iph: ipHash, slug: SLUG, iat: IAT });
 const prefix = b64url(challengePayloadJson);
 const sig = hmac(prefix, SECRET);
+
+// ---- 来源域名绑定（comment_verify_domain_enabled）----
+// org 只在开启时出现，且必须追加在末尾：插在中间会让同一份挑战在两端得到不同的 prefix。
+const originHash = sha256Hex(`org:${SECRET}:${ORIGIN}`).slice(0, 16);
+const challengePayloadJsonLocked = JSON.stringify({
+  v: 2,
+  cid: CID,
+  iph: ipHash,
+  slug: SLUG,
+  iat: IAT,
+  org: originHash,
+});
+const prefixLocked = b64url(challengePayloadJsonLocked);
+const sigLocked = hmac(prefixLocked, SECRET);
 
 // ---- 蜜罐字段名 ----
 const honeypot = `v_${sha256Hex(`hp:${SECRET}:${SLUG}`).slice(0, 10)}`;
@@ -62,7 +78,7 @@ const program = generateProgram(programSeed);
 const programResult = interpretProgram(program);
 if (!programResult.ok) throw new Error("生成的程序无法被解释：这是实现缺陷");
 
-// ---- 票据：字段顺序固定为 v / iph / slug / iat / exp / jti ----
+// ---- 票据：字段顺序固定为 v / iph / slug / iat / exp / jti（可选 org 追加在末尾）----
 const ticketPayloadJson = JSON.stringify({
   v: 2,
   iph: ipHash,
@@ -73,6 +89,18 @@ const ticketPayloadJson = JSON.stringify({
 });
 const ticketBody = b64url(ticketPayloadJson);
 const ticketSig = hmac(ticketBody, SECRET);
+
+const ticketPayloadJsonLocked = JSON.stringify({
+  v: 2,
+  iph: ipHash,
+  slug: SLUG,
+  iat: IAT,
+  exp: EXP,
+  jti: JTI,
+  org: originHash,
+});
+const ticketBodyLocked = b64url(ticketPayloadJsonLocked);
+const ticketSigLocked = hmac(ticketBodyLocked, SECRET);
 
 const payload = {
   _comment:
@@ -95,6 +123,13 @@ const payload = {
   prefix,
   sig,
 
+  // 来源域名绑定（comment_verify_domain_enabled 开启时的形状）
+  origin: ORIGIN,
+  originHash,
+  challengePayloadJsonLocked,
+  prefixLocked,
+  sigLocked,
+
   hashwx: {
     c: challengeBytes.toString("hex"),
     d: Math.round(DIFFICULTY / count),
@@ -111,6 +146,9 @@ const payload = {
   ticketPayloadJson,
   ticketBody,
   ticketSig,
+  ticketPayloadJsonLocked,
+  ticketBodyLocked,
+  ticketSigLocked,
 };
 
 const outPath = path.resolve(__dirname, "..", "..", "doc", "vectors", "verify-v2.json");
@@ -122,6 +160,9 @@ console.log(`  ipHash   = ${ipHash}`);
 console.log(`  honeypot = ${honeypot}`);
 console.log(`  prefix   = ${prefix}`);
 console.log(`  sig      = ${sig}`);
+console.log(`  orgHash  = ${originHash}`);
+console.log(`  locked   = ${prefixLocked}`);
+console.log(`  lockedSig= ${sigLocked}`);
 console.log(`  hashwx.c = ${payload.hashwx.c}`);
 console.log(`  instr    = ${program.ops.length / 3} ops -> [${programResult.regs.join(", ")}]`);
 console.log(`  ticket   = ${ticketBody}.${ticketSig}`);

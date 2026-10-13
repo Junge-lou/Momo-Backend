@@ -13,6 +13,7 @@ import {
   verifySolution,
   createTicket,
   verifyTicket,
+  hashOrigin,
   VERIFY_PROTOCOL_VERSION,
   TICKET_TTL_SECONDS,
 } from "../src/utils/verify";
@@ -574,8 +575,70 @@ describe("utils/verify — 挑战签发与答案校验", () => {
     }
   });
 
-  it("签名有效但时间戳来自未来 → challenge from the future", async () => {
+  it("org 字段类型不对 → malformed payload（不退化成域名不匹配）", async () => {
     const { prefix, sig } = await signPayload({
+      v: 2,
+      cid: "cid-org-shape",
+      iph: hashIp(VECTOR_IP, VECTOR_SECRET),
+      slug: VECTOR_SLUG,
+      iat: Date.now(),
+      org: 123,
+    });
+    expect(
+      await verifySolution({
+        prefix,
+        sig,
+        nonces: ["0", "0", "0", "0"],
+        elapsedMs: 1000,
+        ip: VECTOR_IP,
+        postSlug: VECTOR_SLUG,
+        orgHash: hashOrigin("https://a.com", VECTOR_SECRET),
+      })
+    ).toEqual({ ok: false, reason: "malformed payload" });
+  });
+
+  it("来源域名绑定：缺 org → domain required，换域名 → domain mismatch，未开启时忽略 org", async () => {
+    const orgA = hashOrigin("https://a.com", VECTOR_SECRET);
+    const orgB = hashOrigin("https://b.com", VECTOR_SECRET);
+
+    // 关闭状态下签发的挑战没有 org
+    const legacy = await createChallenge("198.51.100.11", VECTOR_SLUG);
+    const legacyBase = {
+      prefix: legacy.prefix,
+      sig: legacy.sig,
+      nonces: solveHashwx(legacy.pow),
+      elapsedMs: 1000,
+      ip: "198.51.100.11",
+      postSlug: VECTOR_SLUG,
+    };
+    expect(await verifySolution({ ...legacyBase, orgHash: orgA })).toEqual({
+      ok: false,
+      reason: "domain required",
+    });
+    // 不开域名绑定时完全忽略 org（向后兼容）
+    expect(await verifySolution({ ...legacyBase })).toEqual({ ok: true });
+
+    // 带 org 的挑战：换域名必须被拒，且拒绝发生在消耗挑战之前
+    const locked = await createChallenge("198.51.100.12", VECTOR_SLUG, orgA);
+    expect(JSON.parse(fromB64url(locked.prefix)).org).toBe(orgA);
+
+    const lockedBase = {
+      prefix: locked.prefix,
+      sig: locked.sig,
+      nonces: solveHashwx(locked.pow),
+      elapsedMs: 1000,
+      ip: "198.51.100.12",
+      postSlug: VECTOR_SLUG,
+    };
+    expect(await verifySolution({ ...lockedBase, orgHash: orgB })).toEqual({
+      ok: false,
+      reason: "domain mismatch",
+    });
+    // 换回本域名仍能兑换：域名不匹配不消耗挑战（否则一次误报就要让访客重新解题）
+    expect(await verifySolution({ ...lockedBase, orgHash: orgA })).toEqual({ ok: true });
+  });
+
+  it("签名有效但时间戳来自未来 → challenge from the future", async () => {    const { prefix, sig } = await signPayload({
       v: 2,
       cid: "cid-future",
       iph: hashIp(VECTOR_IP, VECTOR_SECRET),
@@ -704,6 +767,23 @@ describe("utils/verify — 票据签发与校验", () => {
   it("票据绑定文章：换 slug 无效", async () => {
     const ticket = await createTicket(VECTOR_IP, VECTOR_SLUG);
     expect(await verifyTicket(ticket, VECTOR_IP, "/posts/other")).toBe(false);
+  });
+
+  it("票据绑定来源域名：换域名无效，未带 org 的旧票据在开启后失效", async () => {
+    const orgA = hashOrigin("https://a.com", VECTOR_SECRET);
+    const orgB = hashOrigin("https://b.com", VECTOR_SECRET);
+
+    const ticket = await createTicket(VECTOR_IP, VECTOR_SLUG, orgA);
+    expect(await verifyTicket(ticket, VECTOR_IP, VECTOR_SLUG, orgA)).toBe(true);
+    expect(await verifyTicket(ticket, VECTOR_IP, VECTOR_SLUG, orgB)).toBe(false);
+
+    // 未开启域名绑定时签发的票据没有 org：开启后必须拒绝（前端会重新验证一次）
+    const legacy = await createTicket(VECTOR_IP, VECTOR_SLUG);
+    expect(await verifyTicket(legacy, VECTOR_IP, VECTOR_SLUG, orgA)).toBe(false);
+
+    // 未开启域名绑定时忽略 org：带与不带 org 的票据都接受（向后兼容）
+    expect(await verifyTicket(legacy, VECTOR_IP, VECTOR_SLUG)).toBe(true);
+    expect(await verifyTicket(ticket, VECTOR_IP, VECTOR_SLUG)).toBe(true);
   });
 
   it("票据被篡改即无效", async () => {

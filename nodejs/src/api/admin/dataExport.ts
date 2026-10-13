@@ -60,6 +60,7 @@ export async function exportSettings(c: Context): Promise<Response> {
     comment_verify_difficulty: true,
     comment_verify_instr_enabled: true,
     comment_verify_block_automated: true,
+    comment_verify_domain_enabled: true,
     comment_verify_retention_days: true,
     comment_verify_log_challenge: true,
     trust_proxy: true,

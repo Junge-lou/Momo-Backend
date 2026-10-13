@@ -22,9 +22,12 @@ type VerifyRecordInput struct {
 	ChallengeID string
 	PostSlug    string
 	IP          string
-	Country     string
-	Network     string
-	ASN         *int64
+	// Origin 归一化后的来源域名（如 https://blog.example.com）。
+	// 仅 comment_verify_domain_enabled 开启时有值；被域名校验拒绝的请求也记录。
+	Origin  string
+	Country string
+	Network string
+	ASN     *int64
 }
 
 // VerifyRecordQuery 认证明细列表查询参数（语义与 Node / Worker 完全一致）
@@ -113,9 +116,11 @@ type VerifyRecordItem struct {
 	ChallengeID string `json:"challengeId"`
 	PostSlug    string `json:"postSlug"`
 	IPAddress   string `json:"ipAddress"`
-	Country     string `json:"country"`
-	Network     string `json:"network"`
-	ASN         *int64 `json:"asn"`
+	// Origin 来源域名（域名绑定开启时有值），空值归一为 ""
+	Origin  string `json:"origin"`
+	Country string `json:"country"`
+	Network string `json:"network"`
+	ASN     *int64 `json:"asn"`
 }
 
 // VerifyRecordList 认证明细分页结果（GET /admin/verify/records）

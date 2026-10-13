@@ -1,6 +1,7 @@
 import { Context } from 'hono';
 import { Bindings } from '../../bindings';
 import {
+  checkVerifyDomain,
   createTicket,
   getDifficulty,
   isVerifyEnabled,
@@ -15,7 +16,7 @@ import { extractCfGeo, recordVerifyEvent, resolveWaitUntil } from '../../utils/v
 /**
  * 校验无感验证答案并签发票据（POST /api/verify/solution）
  *
- * 请求体（协议 v2）: { post_slug, prefix, sig, nonces: string[], elapsed_ms, hp?, instr? }
+ * 请求体（协议 v2）: { post_slug, prefix, sig, nonces: string[], elapsed_ms, hp?, post_url?, instr? }
  * 成功返回 ticket，前端在提交评论时带上。
  *
  * 兼容性：v1 客户端提交的是单个 `nonce` 字段，没有 `nonces`。
@@ -24,6 +25,9 @@ import { extractCfGeo, recordVerifyEvent, resolveWaitUntil } from '../../utils/v
  *
  * post_slug 必须与签发挑战时的净化口径完全一致（两处都用 sanitizePostSlug）：
  * 挑战载荷里的 slug 受签名保护，不一致会得到 slug mismatch。
+ *
+ * 来源域名绑定：开启时先校验来源命中白名单（fail-closed），再用本次请求观测到的来源
+ * 哈希与挑战载荷里的 `org` 比对；签出的票据同样带上 `org`，投评论时还要再比一次。
  */
 export const verifySolutionHandler = async (c: Context<{ Bindings: Bindings }>) => {
   try {
@@ -50,11 +54,38 @@ export const verifySolutionHandler = async (c: Context<{ Bindings: Bindings }>) 
     };
     const waitUntil = resolveWaitUntil(c);
 
+    // 来源域名绑定：必须在动手算力校验之前拒绝，白名单外的站点连挑战都不该拿到。
+    const domain = await checkVerifyDomain(c.env, {
+      origin: c.req.header('origin'),
+      referer: c.req.header('referer'),
+      postUrl: data?.post_url,
+    });
+    if (!domain.ok) {
+      console.warn(`[security] 拒绝来源未授权的验证答案提交：${domain.decision}`, domain.origin);
+      await recordVerifyEvent(
+        c.env,
+        { event: 'fail', reason: `domain:${domain.decision}`, origin: domain.origin, ...recordBase },
+        waitUntil
+      );
+      return c.json(
+        {
+          code: 403,
+          message: 'Request source is not allowed. Add this site to the allow-origin list in the dashboard.',
+          reason: 'DOMAIN_NOT_ALLOWED',
+        },
+        403
+      );
+    }
+
     // 蜜罐字段被填写 => 认定为脚本，静默拒绝
     const honeypot = data?.hp;
     if (honeypot !== undefined && honeypot !== null && String(honeypot).trim() !== '') {
       console.warn('人机验证蜜罐命中，已拒绝:', ip);
-      await recordVerifyEvent(c.env, { event: 'fail', reason: 'honeypot', ...recordBase }, waitUntil);
+      await recordVerifyEvent(
+        c.env,
+        { event: 'fail', reason: 'honeypot', origin: domain.origin, ...recordBase },
+        waitUntil
+      );
       return c.json({ code: 403, message: 'Verification failed', reason: 'honeypot' }, 403);
     }
 
@@ -66,16 +97,25 @@ export const verifySolutionHandler = async (c: Context<{ Bindings: Bindings }>) 
       ip,
       // 必须与签发挑战时的 post_slug 完全一致（挑战载荷里的 slug 由签名保护）
       postSlug,
+      orgHash: domain.orgHash,
       instr: data?.instr,
     });
 
     if (!check.ok) {
-      await recordVerifyEvent(c.env, { event: 'fail', reason: check.reason, ...recordBase }, waitUntil);
+      await recordVerifyEvent(
+        c.env,
+        { event: 'fail', reason: check.reason, origin: domain.origin, ...recordBase },
+        waitUntil
+      );
       return c.json({ code: 403, message: 'Verification failed', reason: check.reason }, 403);
     }
 
-    const ticket = await createTicket(c.env, ip, postSlug);
-    await recordVerifyEvent(c.env, { event: 'pass', ...recordBase }, waitUntil);
+    const ticket = await createTicket(c.env, ip, postSlug, domain.orgHash);
+    await recordVerifyEvent(
+      c.env,
+      { event: 'pass', origin: domain.origin, ...recordBase },
+      waitUntil
+    );
     return c.json({
       code: 200,
       message: 'Verification passed',

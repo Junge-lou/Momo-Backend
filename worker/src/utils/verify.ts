@@ -1,9 +1,11 @@
 import { Bindings } from '../bindings';
 import { getSetting, setSetting } from './settings';
+import { checkDomainLock, pickBoundOrigin } from './origin';
 import {
   base64urlBytes,
   fromBase64url,
   hashVerifyIp,
+  hashVerifyOrigin,
   hmacSHA256,
   honeypotFieldName,
   sha256Bytes,
@@ -36,6 +38,11 @@ import { createInstrumentationChallenge, verifyInstrumentation } from './instrum
  * - 难度语义由「前导 0 比特数」变为「总期望哈希次数」，旧值自动按 2^值 迁移
  * - 答案由单个 nonce 变为 nonces 数组（默认 4 个子挑战，压平解题耗时长尾）
  * - 挑战单次使用（不再按 cid:nonce 去重），票据版本号升为 2，v1 票据一律拒绝
+ *
+ * v2 之上的向后兼容扩展（非破坏性）：
+ * - `comment_verify_domain_enabled` 开启时，挑战与票据载荷**末尾追加** `org`（来源域名哈希），
+ *   由 `checkVerifyDomain` / `checkDomainLock` 判定来源；关闭时该字段整个缺席，形状与旧版一致。
+ *   详见 utils/origin.ts 与 doc/api.md 的「来源域名绑定」。
  */
 
 /** 协议版本，供前端判断前后端是否配套 */
@@ -48,6 +55,8 @@ const SETTING_SECRET = "comment_verify_secret";
 // 第二层（Instrumentation 质询）
 const SETTING_INSTR_ENABLED = "comment_verify_instr_enabled";
 const SETTING_BLOCK_AUTOMATED = "comment_verify_block_automated";
+// 来源域名绑定（复用 allow_origin 白名单）
+const SETTING_DOMAIN_ENABLED = "comment_verify_domain_enabled";
 
 // 难度：总期望哈希次数
 const MIN_TOTAL_WORK = 1000;
@@ -129,6 +138,60 @@ export async function shouldBlockAutomated(env: Bindings): Promise<boolean> {
 }
 
 /**
+ * 是否开启「来源域名绑定」，**默认关闭**。
+ *
+ * 开启后：挑战签发、答案兑换、评论提交三处都要求请求来源命中 `allow_origin` 白名单
+ * （白名单不可用时 fail-closed），并把来源哈希签进挑战与票据 —— 为 A 域名签发的凭证
+ * 无法在 B 域名使用，纯浏览器侧的跨域调用也彻底走不通（页面无法伪造 Origin）。
+ */
+export async function isDomainLockEnabled(env: Bindings): Promise<boolean> {
+  return (await getSetting(env, SETTING_DOMAIN_ENABLED)) === "true";
+}
+
+export interface DomainCheckResult {
+  /** 是否开启了域名绑定（关闭时 ok 恒为 true，其余字段为占位值） */
+  enabled: boolean;
+  ok: boolean;
+  /** 归一化来源（被拒时尽量给出，便于日志与认证记录） */
+  origin: string;
+  /** `disabled` / `allow` / `deny:*` */
+  decision: string;
+  /** 归一化来源的加盐哈希；未开启或来源不可判定时为空串 */
+  orgHash: string;
+}
+
+/**
+ * 按设置项做一次「来源域名绑定」判定（三端一致）。
+ *
+ * 调用方拿到 `ok === false` 时必须直接拒绝（403），不要继续签发挑战或兑换票据。
+ */
+export async function checkVerifyDomain(
+  env: Bindings,
+  params: {
+    origin?: unknown;
+    referer?: unknown;
+    postUrl?: unknown;
+  }
+): Promise<DomainCheckResult> {
+  if (!(await isDomainLockEnabled(env))) {
+    return { enabled: false, ok: true, origin: "", decision: "disabled", orgHash: "" };
+  }
+
+  const input = {
+    allowOrigin: await getSetting(env, "allow_origin"),
+    origin: params.origin,
+    referer: params.referer,
+    postUrl: params.postUrl,
+  };
+  const result = checkDomainLock(input);
+  const observed = pickBoundOrigin(input);
+  const origin = observed ? observed.origin : "";
+  const orgHash = origin ? await hashVerifyOrigin(origin, await getSecret(env)) : "";
+
+  return { enabled: true, ok: result.ok, origin, decision: result.decision, orgHash };
+}
+
+/**
  * 读取总期望哈希次数，做上下限保护，并兼容 v1 的历史配置值。
  *
  * 迁移规则：值 ≤ 26 视为 v1 的「前导 0 比特数」，换算为 2^值 后按
@@ -202,6 +265,14 @@ interface ChallengePayload {
    */
   slug: string;
   iat: number;
+  /**
+   * 来源域名哈希（可选，仅 comment_verify_domain_enabled 为 true 时存在）。
+   *
+   * 必须追加在**末尾**：前面的字段顺序是三端共用的签名口径，插在中间会让新旧载荷互不认可。
+   * 兑换时用「本次请求观测到的来源」重新计算并要求常数时间相等 —— 为 A 域名签发的挑战
+   * 无法在 B 域名兑换。
+   */
+  org?: string;
 }
 
 export interface ChallengeResult {
@@ -230,11 +301,14 @@ export interface ChallengeResult {
  * postSlug 必须与调用方在提交答案时传入的完全一致（同一套净化规则，
  * 见 api/public/verifyChallenge.ts 与 verifySolution.ts 都调用的 sanitizePostSlug），
  * 因为挑战被签名绑定到这篇文章，只有同一篇文章才能兑换票据。
+ *
+ * orgHash 为空串表示未开启域名绑定（载荷里不出现 `org` 字段，形状与旧版本完全一致）。
  */
 export async function createChallenge(
   env: Bindings,
   ip: string,
-  postSlug: string
+  postSlug: string,
+  orgHash = ""
 ): Promise<ChallengeResult> {
   const secret = await getSecret(env);
   const now = Date.now();
@@ -250,6 +324,7 @@ export async function createChallenge(
     slug: postSlug,
     iat: now,
   };
+  if (orgHash) payload.org = orgHash;
 
   const prefix = toBase64url(JSON.stringify(payload));
   const spec = await buildHashwxSpec(env, payload.cid, secret);
@@ -287,12 +362,13 @@ function pruneChallenges(now: number): void {
 export type SolutionCheck = { ok: true } | { ok: false; reason: string };
 
 /**
- * 校验挑战答案（签名 + 协议版本 + 文章绑定 + 时效 + IP 绑定 + 时序 + HashWX + 防重放 + 第二层）。
+ * 校验挑战答案（签名 + 协议版本 + 文章绑定 + 来源域名 + 时效 + IP 绑定 + 时序 + HashWX + 防重放 + 第二层）。
  *
  * 校验顺序必须与 nodejs/src/utils/verify.ts 完全一致：顺序会影响返回的 reason，
  * 三端测试都依赖它。
  *
  * @param postSlug 本次提交声明的文章，必须与挑战签发时签进去的一致
+ * @param orgHash 本次请求观测到的来源域名哈希；空串表示未开启域名绑定
  * @param instr 第二层答案 { regs, env, lw, lh, tm }；开启第二层时必填
  */
 export async function verifySolution(
@@ -305,10 +381,12 @@ export async function verifySolution(
     ip: string;
     /** 本次提交声明的文章，必须与挑战签发时签进去的一致 */
     postSlug: string;
+    /** 本次请求观测到的来源域名哈希；空串表示未开启域名绑定 */
+    orgHash?: string;
     instr?: unknown;
   }
 ): Promise<SolutionCheck> {
-  const { prefix, sig, nonces, elapsedMs, ip, postSlug, instr } = params;
+  const { prefix, sig, nonces, elapsedMs, ip, postSlug, orgHash = "", instr } = params;
   const secret = await getSecret(env);
   const now = Date.now();
 
@@ -348,11 +426,29 @@ export async function verifySolution(
   ) {
     return { ok: false, reason: "malformed payload" };
   }
+  // org 是可选的：未开启域名绑定时整个字段缺席。出现了就必须是字符串，
+  // 否则视为畸形载荷（而不是退化成「域名不匹配」，那样会掩盖实现缺陷）。
+  if (payload.org !== undefined && typeof payload.org !== "string") {
+    return { ok: false, reason: "malformed payload" };
+  }
 
   // 6. 文章绑定：挑战只能兑换签发它的那篇文章的票据。
   //    给出专属 reason 而不是含糊的算力不足，便于排障与前端提示。
   if (!timingSafeEqual(payload.slug, postSlug)) {
     return { ok: false, reason: "slug mismatch" };
+  }
+
+  // 6.5 来源域名绑定（仅开启 comment_verify_domain_enabled 时生效）。
+  //     两个专属 reason 分开：domain required 说明挑战签发时该开关还没开（重新验证即可），
+  //     domain mismatch 说明有人拿别的域名的挑战来兑换。
+  //     必须在防重放之前返回：域名不匹配不得消耗挑战（不得写入已用集合）。
+  if (orgHash) {
+    if (typeof payload.org !== "string" || payload.org.length === 0) {
+      return { ok: false, reason: "domain required" };
+    }
+    if (!timingSafeEqual(payload.org, orgHash)) {
+      return { ok: false, reason: "domain mismatch" };
+    }
   }
 
   // 7. 时效
@@ -424,10 +520,26 @@ interface TicketPayload {
   iat: number;
   exp: number;
   jti: string;
+  /**
+   * 来源域名哈希（可选，仅 comment_verify_domain_enabled 为 true 时存在）。
+   *
+   * 与挑战同构、同样追加在末尾：票据也只能在签发它的域名下使用，
+   * 这样 挑战 → 票据 → 评论提交 是**同一条域名链**。
+   */
+  org?: string;
 }
 
-/** 签发通过验证的票据 */
-export async function createTicket(env: Bindings, ip: string, postSlug: string): Promise<string> {
+/**
+ * 签发通过验证的票据。
+ *
+ * orgHash 为空串表示未开启域名绑定（载荷里不出现 `org` 字段，形状与旧版本完全一致）。
+ */
+export async function createTicket(
+  env: Bindings,
+  ip: string,
+  postSlug: string,
+  orgHash = ""
+): Promise<string> {
   const secret = await getSecret(env);
   const now = Date.now();
 
@@ -443,6 +555,7 @@ export async function createTicket(env: Bindings, ip: string, postSlug: string):
     exp: now + TICKET_TTL_MS,
     jti: base64urlBytes(random),
   };
+  if (orgHash) payload.org = orgHash;
 
   const body = toBase64url(JSON.stringify(payload));
   return `${body}.${await hmacSHA256(body, secret)}`;
@@ -450,12 +563,17 @@ export async function createTicket(env: Bindings, ip: string, postSlug: string):
 
 export const TICKET_TTL_SECONDS = Math.floor(TICKET_TTL_MS / 1000);
 
-/** 校验票据（供提交评论时调用） */
+/**
+ * 校验票据（供提交评论时调用）。
+ *
+ * 域名校验排在 slug 之后、IP 之前：开启域名绑定时，缺 org 或不匹配一律 false。
+ */
 export async function verifyTicket(
   env: Bindings,
   ticket: string | undefined,
   ip: string,
-  postSlug: string
+  postSlug: string,
+  orgHash = ""
 ): Promise<boolean> {
   if (!ticket || typeof ticket !== "string") return false;
 
@@ -476,6 +594,14 @@ export async function verifyTicket(
   if (!payload || payload.v !== VERIFY_PROTOCOL_VERSION) return false;
   if (typeof payload.exp !== "number" || Date.now() > payload.exp) return false;
   if (payload.slug !== postSlug) return false;
+
+  // 域名绑定：开启时必须同时满足「票据里有 org」且「与本次请求的来源一致」。
+  // 票据只在签发它的域名下可用；开关刚打开时旧票据没有 org，会被判失败并触发前端重新验证。
+  if (orgHash) {
+    if (typeof payload.org !== "string" || payload.org.length === 0) return false;
+    if (!timingSafeEqual(payload.org, orgHash)) return false;
+  }
+
   if (!timingSafeEqual(await hashVerifyIp(ip, secret), String(payload.iph))) return false;
 
   return true;

@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { Bindings } from './bindings'
-import { customCors, originGuard } from './utils/cors'
+import { customCors } from './utils/cors'
 import { getSetting } from './utils/settings'
 import { adminAuth } from './utils/auth'
 import { ensureMigrated } from './utils/migrations'
@@ -42,7 +42,7 @@ app.use('/api/*', async (c, next) => {
 
 // API
 app.get('/api/comments', getComments)
-app.post('/api/comments', originGuard, postComment)
+app.post('/api/comments', postComment)
 app.get('/api/verify-email/verify', verifyEmail)
 
 // 无感验证（Turnstile 风格）

@@ -66,6 +66,7 @@ type verifyRecordRow struct {
 	ChallengeID sql.NullString `db:"challenge_id"`
 	PostSlug    sql.NullString `db:"post_slug"`
 	IPAddress   sql.NullString `db:"ip_address"`
+	Origin      sql.NullString `db:"origin"`
 	Country     sql.NullString `db:"country"`
 	Network     sql.NullString `db:"network"`
 	ASN         sql.NullInt64  `db:"asn"`
@@ -147,8 +148,8 @@ func (r *commentRepo) RecordVerifyEvent(ctx context.Context, in model.VerifyReco
 
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO VerifyRecord
-			(created_at, event, reason, elapsed_ms, difficulty, challenge_id, post_slug, ip_address, country, network, asn)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(created_at, event, reason, elapsed_ms, difficulty, challenge_id, post_slug, ip_address, origin, country, network, asn)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		time.Now().UnixMilli(),
 		in.Event,
 		nullIfEmpty(in.Reason),
@@ -157,6 +158,8 @@ func (r *commentRepo) RecordVerifyEvent(ctx context.Context, in model.VerifyReco
 		nullIfEmpty(in.ChallengeID),
 		nullIfEmpty(in.PostSlug),
 		nullIfEmpty(in.IP),
+		// 空串与 NULL 一律落 NULL：未开启域名绑定时没有来源域名，不该在表里留下空串
+		nullIfEmpty(in.Origin),
 		nullIfEmpty(in.Country),
 		nullIfEmpty(in.Network),
 		in.ASN,
@@ -548,6 +551,7 @@ func (r *commentRepo) ListVerifyRecords(ctx context.Context, q model.VerifyRecor
 			ChallengeID: row.ChallengeID.String,
 			PostSlug:    row.PostSlug.String,
 			IPAddress:   row.IPAddress.String,
+			Origin:      row.Origin.String,
 			Country:     row.Country.String,
 			Network:     row.Network.String,
 		}

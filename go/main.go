@@ -25,7 +25,7 @@ import (
 )
 
 // Version 与其余端保持一致；1.6.0 起人机验证升级到协议 v2（破坏性变更，详见 doc/update.md）
-const Version = "1.6.0"
+const Version = "1.6.1"
 
 func main() {
 

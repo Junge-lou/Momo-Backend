@@ -52,7 +52,7 @@
 | 200 | 请求成功 | 操作成功 |
 | 400 | 请求参数错误 | 缺少必填字段、格式不正确、字段超长、非法状态值、非法 IP/CIDR 等 |
 | 401 | 未授权 | 未携带 Token 或 Token 失效 |
-| 403 | 禁止访问 | IP 被封禁、IP/邮箱在黑名单中、登录失败次数过多 |
+| 403 | 禁止访问 | 来源不在 `allow_origin` 白名单、IP 被封禁、IP/邮箱在黑名单中、登录失败次数过多 |
 | 404 | 资源不存在 | 资源不存在场景 |
 | 429 | 请求过于频繁 | 评论频率超过限制（同一 IP 60 秒一条，`admin_email` 不受限）、公开评论列表请求过于频繁 |
 | 500 | 服务器内部错误 | 未捕获异常、数据库错误等 |
@@ -78,6 +78,8 @@
 ```
 
 > `admin_key` 仅在管理员评论密钥开启且邮箱为管理员邮箱时需要；`verify_ticket` 仅在 `comment_verify_enabled` 为 `"true"` 时需要，由 `/api/verify/solution` 下发。
+> `post_url` 除用于通知邮件里的「查看回复」链接外，还参与**服务端来源校验**（见下方说明），
+> 因此自定义前端应传页面的绝对地址（官方组件传的是 `window.location.href`）。
 
 **响应（成功）**：
 ```json
@@ -121,6 +123,20 @@
 ```json
 {
   "code": 403,
+  "message": "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+  "reason": "ORIGIN_NOT_ALLOWED"
+}
+```
+```json
+{
+  "code": 403,
+  "message": "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+  "reason": "DOMAIN_NOT_ALLOWED"
+}
+```
+```json
+{
+  "code": 403,
   "message": "Human verification failed or expired",
   "reason": "VERIFY_REQUIRED"
 }
@@ -128,6 +144,25 @@
 
 > 当 `comment_verify_enabled` 设为 `"true"` 时，必须携带有效的 `verify_ticket`，否则返回上面的 `VERIFY_REQUIRED`。
 > 使用管理员评论密钥验证通过的博主评论不受此限制。
+>
+> `DOMAIN_NOT_ALLOWED` 来自**来源域名绑定**（`comment_verify_domain_enabled`，默认关闭）：
+> 它比下面的普通来源校验更严，且**排在它前面**执行 —— `allow_origin` 为空或为 `*` 时不会放行，
+> 票据还必须与本请求同域。详见「人机验证」章节的「六、来源域名绑定」。
+
+> **服务端来源校验**：`allow_origin` 配置成白名单（非空且不含 `*`）时，提交评论会**先**校验请求声明的来源 ——
+> 请求头 `Origin`、请求头 `Referer`、请求体 `post_url` 三者中**所有存在的来源都必须落在白名单内**，
+> 且至少要有一个可判定；三者全缺、值无法解析（`Origin: null`、相对地址的 `post_url`、非 `http(s)` 协议）
+> 或任一不匹配，一律返回 `403`（`reason: "ORIGIN_NOT_ALLOWED"`），**不写入评论、不发送任何邮件**
+> （站长通知、回复通知、邮箱验证邮件都在校验之后）。
+>
+> 这道校验堵的是「fork 一份前端 + 在自己服务器上转发请求」的用法：CORS 是浏览器机制，
+> 只决定浏览器能不能读响应，对服务端到服务端的转发完全无效（对方站点能用你的 SMTP 发信正是这样发生的）。
+>
+> 白名单条目可写完整来源（`https://a.com`、`http://localhost:17171`）或裸主机名（`a.com`，此时忽略 scheme 与端口）；
+> 大小写、尾斜杠与默认端口（`http:80` / `https:443`）会被归一化；**不支持通配符子域**。
+> 校验口径由 `doc/vectors/origin-v1.json` 在 Node / Go / Worker 三端钉死。
+> 合法部署示例：浏览器直连时 `Origin` 命中即可；若站点自己做了服务端转发（无 `Origin`/`Referer`），
+> 只要把页面的 `post_url` 原样透传，同样能通过。
 
 > **评论频率限制**：同一 IP 60 秒内只能提交一条评论，超出返回 `429`。
 > **例外**：`email` 等于 `admin_email` 的评论（管理员本人）不受该 60 秒冷却限制。
@@ -306,6 +341,10 @@
 > **两层是互补的**：第一层证明「付出了算力」，第二层证明「计算确实发生在浏览器里」。
 > 主要成本杠杆是第一层；按上游说明，`undetected-chromedriver` 这类工具驱动**有头**原生 Chrome
 > 可以绕过全部自动化检测，因此不要只依赖第二层。
+>
+> **可选的第三道闸门是来源域名绑定**（`comment_verify_domain_enabled`，默认关闭）：
+> 要求挑战签发、答案兑换与评论提交都来自 `allow_origin` 白名单内的域名，并把来源域名哈希
+> 签进挑战与票据。详见下面的「六、来源域名绑定」。
 
 > ⚠️ **协议 v2 是破坏性变更**：`prefix` 载荷、难度语义、答案字段与票据版本都与 v1 不兼容。
 > 详见本节末尾的「版本与兼容性」。
@@ -404,9 +443,13 @@ block             = nonce / n                        // 整数除法
 **请求体**：
 ```json
 {
-  "post_slug": "/posts/my-article"
+  "post_slug": "/posts/my-article",
+  "post_url": "https://myblog.com/posts/my-article"
 }
 ```
+
+> `post_url` 是可选的第三个来源声明（前端传 `location.href`），与浏览器自动带上的
+> `Origin` / `Referer` 一起参与来源校验；开启来源域名绑定时三处**存在的**来源都必须命中白名单。
 
 **响应（开启验证）**：
 ```json
@@ -437,7 +480,7 @@ block             = nonce / n                        // 整数除法
 ```
 
 - `instr` 仅在 `comment_verify_instr_enabled` 为 `"true"` 时出现；未开启时该字段整个缺席。
-- `prefix` 是 base64url 编码的载荷 `{"v":2,"cid":…,"iph":…,"slug":…,"iat":…}`（**字段顺序固定**），由 `sig` 做 HMAC-SHA256 签名。
+- `prefix` 是 base64url 编码的载荷 `{"v":2,"cid":…,"iph":…,"slug":…,"iat":…}`（**字段顺序固定**），由 `sig` 做 HMAC-SHA256 签名。开启来源域名绑定时载荷**末尾追加** `org`（来源域名哈希），即 `{"v":2,…,"iat":…,"org":"…"}`；未开启时该字段整个缺席，形状与旧版本完全一致。
 - **挑战绑定文章**：载荷里的 `slug` 就是本次请求的 `post_slug`。提交答案时请求体里的 `post_slug` 必须与它**完全一致**，否则返回 `reason: "slug mismatch"`。
   这是必需的：`/api/verify/solution` 的 `post_slug` 来自未签名的请求体，若不与挑战绑定，一次工作量证明就能在同一 IP 上换成**任意文章**的票据，跨文章防护等于不存在。
   两处必须使用**同一套净化规则**处理 `post_slug`（对 `post_slug` 应用 `checkContent` 后按 **Unicode 码点**截断到 200），否则会出现「同一篇文章两次净化结果不同」的假拒绝。三端口径由 `doc/vectors/sanitize-v2.json` 钉死 —— 注意截断单位是**码点**，不是 UTF-16 码元、也不是字节：按码元切可能切出孤立代理项，按字节切会把多字节字符切成非法 UTF-8，两者都会让三端结果不一致。
@@ -464,6 +507,7 @@ block             = nonce / n                        // 整数除法
 ```json
 {
   "post_slug": "/posts/my-article",
+  "post_url": "https://myblog.com/posts/my-article",
   "prefix": "eyJ2IjoyLCJjaWQiOiI3WGIxcFEyd1M5a0x6WGNWM25SZjRBIiwi...",
   "sig": "5mQ8x1vTn0pLbE2sKd9cRw7yUa4hGf6jZo3iNq8tVm0",
   "nonces": ["58284", "12901", "77310", "4023"],
@@ -480,6 +524,7 @@ block             = nonce / n                        // 整数除法
 ```
 
 > - `nonces` 是与子挑战一一对应的 **u64 十进制字符串**数组，长度必须等于 `pow.count`。
+> - `post_url` 与签发挑战时一样参与来源校验；开启域名绑定时必须与挑战签发的域名一致，否则返回 `domain mismatch`。
 > - `hp` 为蜜罐字段，字段名由评论列表接口下发的 `verify_honeypot` 决定。真人始终提交空值；后端一旦发现非空即判定为脚本并直接拒绝。
 > - `instr` 在服务端开启第二层时必须携带（`env` / `lw` / `lh` / `tm` 用于环境判定，`regs` 用于程序结果比对）。
 > - 最小解题耗时下限为 **50ms**（仅用于拦截预置答案/缓存响应；下限过高会误伤多核高性能机器），上限为挑战有效期。
@@ -498,7 +543,7 @@ block             = nonce / n                        // 整数除法
 }
 ```
 
-> 票据（版本 `v: 2`）有效期 5 分钟，绑定来源 IP 与 `post_slug`；前端刷新页面会重新发起验证。
+> 票据（版本 `v: 2`）有效期 5 分钟，绑定来源 IP 与 `post_slug`；开启来源域名绑定时还额外绑定来源域名（载荷末尾的 `org`），前端刷新页面会重新发起验证。
 
 **响应（失败）**：
 ```json
@@ -510,22 +555,70 @@ block             = nonce / n                        // 整数除法
 ```
 
 > `reason` 仅用于调试与日志定位。第一层可能取值：`missing challenge`、`bad signature`、
-> `malformed prefix`、`malformed payload`、`PROTOCOL_OUTDATED`、**`slug mismatch`**、`challenge expired`、
+> `malformed prefix`、`malformed payload`、`PROTOCOL_OUTDATED`、**`slug mismatch`**、
+> **`domain required`**、**`domain mismatch`**、`challenge expired`、
 > `challenge from the future`、`ip mismatch`、`implausible timing`、`challenge already used`、
 > `malformed spec`、`malformed challenge`、`solution count mismatch`、`bad nonce`、`insufficient work`。
 > 第二层可能取值：`malformed registers`、`program result mismatch`，
 > 以及命中自动化规则时的 `automated browser detected: <规则名列表>`。
-> 蜜罐命中时为 `honeypot`。
+> 蜜罐命中时为 `honeypot`；**来源不在白名单内（或白名单不可用）时为接口层的 `DOMAIN_NOT_ALLOWED`**（HTTP 403，早于算力校验）。
 >
 > 判定顺序（顺序会影响返回的 reason）：签名 → JSON 解析 → 是否为对象 → **协议版本** → 字段形状
-> → **文章绑定** → 时效 → IP → 时序 → 工作量 → 防重放 → 第二层。
+> → **文章绑定** → **来源域名绑定** → 时效 → IP → 时序 → 工作量 → 防重放 → 第二层。
 > 协议版本先于字段形状是刻意的：v1 载荷既没有 `v` 也没有 `slug`，否则会被误判成 `malformed payload`。
+> 域名绑定也早于算力：`domain mismatch` **不消耗挑战**（不会写进已用集合），避免一次跨域误报逼真人重新解题。
 
 > **防重放**：挑战是**单次使用**的 —— 兑换成功（或第二层校验失败）之后，同一 `prefix` 不能再提交。
 > 第二层校验发生在挑战被标记为已用之后，这是有意的：否则攻击者可以用同一个已通过算力证明的挑战
 > 反复更换环境向量，直到凑出一个能通过自动化检测的组合。
 
-#### 六、相关设置项
+#### 六、来源域名绑定（`comment_verify_domain_enabled`）
+
+默认**关闭**。开启后，无感验证的**签发、兑换、投评论**三处都要求请求来源命中
+`allow_origin` 白名单，并把来源域名的加盐哈希签进挑战与票据：
+
+```
+org = hex(SHA256("org:" + secret + ":" + 归一化来源))[:16]   // 与 iph 同构
+```
+
+| 环节 | 行为 |
+| --- | --- |
+| `POST /api/verify/challenge` | 来源不命中 → `403 DOMAIN_NOT_ALLOWED`，**不签发挑战**（只写一条 `fail` 认证记录） |
+| `POST /api/verify/solution` | 来源不命中 → `403 DOMAIN_NOT_ALLOWED`；来源与挑战载荷里的 `org` 不一致 → `403 reason: "domain mismatch"` |
+| `POST /api/comments` | 来源不命中 → `403 DOMAIN_NOT_ALLOWED`；票据里的 `org` 与本次来源不一致 → `403 VERIFY_REQUIRED` |
+
+**来源如何确定**（三端一致，口径复用 `doc/vectors/origin-v1.json`）：
+
+1. 候选项按 **`Origin` → `Referer` → `post_url`** 的顺序取第一个可解析（http/https）者作为「本次请求代表的来源」；
+2. 所有**已声明**的候选项都必须命中白名单，任一不命中即拒绝；
+3. 一个候选项都没有、或某个已声明值无法解析（`Origin: null`、相对路径的 `post_url`、非 http(s) scheme）→ 一律拒绝（fail-closed）。
+
+**与写接口的普通来源校验的区别只有两点**（这正是它值得单独开关的原因）：
+
+- **白名单不可用时不是放行而是拒绝**：`allow_origin` 留空 / 只有空白 / 含 `*` 时，
+  普通来源校验会 `skip`（保持旧版本行为），而域名绑定 fail-closed
+  （判定码 `deny:no_whitelist`）。也就是说「填了 `*` 等于裸奔」在这一层不再成立；
+  配置疏漏会让验证整体不可用，面板会就此给出醒目告警。
+- **域名被签进凭证**：为 A 域名签发的挑战无法在 B 域名兑换，票据同理。
+  一次认证的域名链是 `挑战 → 票据 → 评论提交`。
+
+**它挡得住什么、挡不住什么**（务必如实理解）：
+
+- ✅ 挡住**浏览器侧**的跨域滥用：`fetch` 不允许页面自定义 `Origin`，
+  所以「fork 一份组件、把 `apiUrl` 指向别人的后端」在自己的页面上必然带着自己的域名来，
+  会被直接拒绝 —— 这是最常见的滥用形态，而且与站点是否配置了 `allow_origin` 无关。
+- ✅ 挡住**跨站点搬运凭证**：A 域名算出的挑战/票据不能拿去 B 域名用。
+- ⚠️ **挡不住伪造请求头的服务端转发**：`Origin` / `Referer` / `post_url` 都是请求方可以伪造的，
+  对方在自己的服务器上补上白名单域名照样能穿过这一层（项目在 `origin.ts` 里对普通来源校验
+  有同样的说明）。这道闸门抬高的是滥用成本，**不是密码学边界**；真正的边界需要站点级令牌，
+  或 CDN 侧的 TLS/机器人指纹能力。
+- ℹ️ 被拒的请求同样会写认证记录（`reason = domain:deny:*`，`origin` = 观测到的域名），
+  便于博主在「认证记录」页发现是谁在尝试中转。
+
+> 兼容性：开关关闭时挑战/票据载荷里**完全不出现** `org`，与旧版本逐字节一致；
+> 开关中途打开时，手上那份没有 `org` 的挑战会返回 `domain required`（前端重新验证一次即可，属可重试失败）。
+
+#### 七、相关设置项
 
 | 设置项 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -533,11 +626,12 @@ block             = nonce / n                        // 整数除法
 | `comment_verify_difficulty` | `"1000000"` | **访客需要完成的哈希计算总次数**（协议 v2 语义），有效范围 1000–1000000000，按 4 个子挑战均分。**兼容 v1 旧值**：≤26 的值按 `2^值` 迁移（视为旧的前导 0 比特数），且上限钳到 2^20。**`"0"`、负数或解析不出数字时退回默认强度 `1000000`**（视为配置无效，安全的失败方向）；合法但低于下限的值才钳到 1000；`parseInt` 容忍尾部垃圾（与 v1 一致，`"1.5x"` 解析为 `1`） |
 | `comment_verify_instr_enabled` | `"false"` | 第二层环境质询开关，默认关闭 |
 | `comment_verify_block_automated` | `"false"` | 第二层命中自动化特征时是否拒绝，默认只记录日志 |
+| `comment_verify_domain_enabled` | `"false"` | 来源域名绑定开关，默认关闭。复用 `allow_origin` 白名单；白名单为空或含 `*` 时 **fail-closed**（一律拒绝） |
 | `comment_verify_retention_days` | `"30"` | 认证记录（`VerifyRecord`）保留天数：`0` 或负数 = 永久保留，上限 3650，非法值按 30 处理；超期记录由三端惰性清理自动删除 |
 | `comment_verify_log_challenge` | `"true"` | 是否记录「签发挑战」事件（非 `"false"` 即记录）。关闭后只记录通过/失败，可显著降低写入量，代价是看不到「签发了但没人提交答案」的流失 |
 | `comment_verify_secret` | 自动生成 | 服务端签名密钥，首次使用时自动生成并写入 `Settings` 表，不对外提供读写 |
 
-#### 七、版本与兼容性
+#### 八、版本与兼容性
 
 | 项目 | 协议 v1（包版本 1.5.0 及更早） | 协议 v2（包版本 1.6.0 起） |
 | --- | --- | --- |
@@ -548,9 +642,13 @@ block             = nonce / n                        // 整数除法
 | 票据版本 | `v: 1` | `v: 2` |
 | 挑战重放 | 按 `cid:nonce` 去重 | 挑战单次使用 |
 | 最小解题耗时 | 300ms | 50ms |
+| 来源域名绑定 | 无 | 可选（载荷末尾追加 `org`，默认关闭） |
 
 - **旧前端 + 新后端**：旧前端签发的 `prefix` 载荷 `v` 为 1，新后端返回 `reason: "PROTOCOL_OUTDATED"` 而不是笼统的失败原因。
 - **新前端 + 旧后端**：挑战响应里没有 `pow`，新前端会显示「验证服务版本过旧，请联系博主升级」，并禁用无效的重试按钮。
+- **`org` 字段是向后兼容的追加**：`prefix` 对前端是不透明串（前端只原样回传），因此
+  旧版前端配新版后端、新版前端配旧版后端都能工作；只有三端**服务端实现**之间必须同步升级，否则
+  一端签发的挑战在另一端无法通过域名绑定（这与协议 v2 的其它口径要求相同）。
 - 评论列表接口下发 `verify_version`（当前为 `"2"`），便于前端做前后端配套判断。
 - 浏览器需要支持 WebAssembly（第一层必需）；不支持时前端会提示「浏览器版本过低，不支持验证」。**v2 不提供纯 JS 降级路径**。
 
@@ -653,6 +751,7 @@ block             = nonce / n                        // 整数除法
     "comment_verify_difficulty": "1000000",
     "comment_verify_instr_enabled": "false",
     "comment_verify_block_automated": "false",
+    "comment_verify_domain_enabled": "false",
     "comment_verify_retention_days": "30",
     "comment_verify_log_challenge": "true"
   }
@@ -786,6 +885,7 @@ block             = nonce / n                        // 整数除法
   "comment_verify_difficulty": "1000000",
   "comment_verify_instr_enabled": "true",
   "comment_verify_block_automated": "false",
+  "comment_verify_domain_enabled": "true",
   "comment_verify_retention_days": "30",
   "comment_verify_log_challenge": "true",
   "trust_proxy": "false"
@@ -798,11 +898,17 @@ block             = nonce / n                        // 整数除法
 > - `comment_verify_enabled` 控制评论无感验证的启用/关闭，默认 `"false"`；开启后提交评论必须携带 `verify_ticket`
 > - `comment_verify_difficulty` 是**访客需要完成的哈希计算总次数**（协议 v2 语义），默认 `"1000000"`；≤26 的历史值会按 `2^值` 自动迁移
 > - `comment_verify_instr_enabled` 开启第二层环境质询，默认 `"false"`；`comment_verify_block_automated` 控制命中自动化特征时是否拒绝，默认 `"false"`（只记录日志）
+> - `comment_verify_domain_enabled` 开启**来源域名绑定**，默认 `"false"`：挑战签发、答案兑换与评论提交都要求来源命中 `allow_origin` 白名单，白名单为空或含 `*` 时一律拒绝（fail-closed）。它挡的是浏览器侧跨域滥用与跨站点搬运凭证，**挡不住伪造请求头的服务端转发**（见「人机验证」章节第六节）
 > - `comment_verify_retention_days` 是认证记录（`VerifyRecord`）的保留天数，默认 `"30"`；`"0"` 表示永久保留，上限 3650
 > - `comment_verify_log_challenge` 控制是否记录「签发挑战」事件，默认 `"true"`；设为 `"false"` 只记录通过/失败以降低写入量
 > - `admin_password` **不在允许写入的字段中**，直接提交会返回 `400`；修改密码请使用 `PUT /admin/password`（需要提供旧凭据）
 > - `ip_blacklist` 会被校验格式，必须是「合法 IP 或 CIDR」组成的 JSON 数组，否则返回 `400`
-> - `allow_origin`：逗号分隔的来源白名单；**留空表示不放开跨域**，填 `*` 表示允许任意来源。
+> - `allow_origin`：逗号分隔的来源白名单，同时承担两件事：① 决定 CORS 是否下发
+>   `Access-Control-Allow-Origin`（浏览器侧）；② **提交评论时的服务端来源校验**
+>   （`Origin` / `Referer` / `post_url` 三处存在的来源都必须命中，否则 `403 ORIGIN_NOT_ALLOWED`，
+>   且不落库、不发信）。**留空表示不放开跨域、同时不启用服务端校验**（行为与旧版本一致）；
+>   填 `*` 表示允许任意来源，同时关闭服务端校验。
+>   白名单条目可写完整来源或裸主机名（忽略 scheme 与端口），不支持通配符子域。
 >   管理接口使用 `Authorization: Bearer`，不依赖 Cookie 凭据，因此不会下发 `Access-Control-Allow-Credentials`
 > - `trust_proxy`：是否信任反向代理下发的客户端 IP 头（`cf-connecting-ip` / `x-real-ip` / `x-forwarded-for`）。
 >   默认 `"false"`，只使用 TCP 连接对端地址；部署在 Nginx / Cloudflare 之后时必须设为 `"true"`。
@@ -1277,6 +1383,7 @@ block             = nonce / n                        // 整数除法
         "challengeId": "3Qk9mZ2f1sV0xA",
         "postSlug": "/posts/hello-world",
         "ipAddress": "203.0.113.42",
+        "origin": "https://myblog.com",
         "country": "US",
         "network": "Comcast Cable Communications",
         "asn": 7922
@@ -1290,8 +1397,10 @@ block             = nonce / n                        // 整数除法
 ```
 
 > `createdAt` 为 ISO 8601 UTC 字符串；`elapsedMs` / `difficulty` / `asn` 在无数据时为 `null`；
-> `reason` / `challengeId` / `postSlug` / `ipAddress` / `country` / `network` 无数据时为空字符串。
+> `reason` / `challengeId` / `postSlug` / `ipAddress` / `origin` / `country` / `network` 无数据时为空字符串。
 > `country` / `network` / `asn` 同样只有 Cloudflare Worker 部署有值。
+> `origin` 仅在开启来源域名绑定（`comment_verify_domain_enabled`）后有值；**被域名校验拒绝的请求也会记录**，
+> 因此这一列是发现「谁在尝试中转」的直接线索（管理面板「认证记录」页有对应的「来源域名」列）。
 
 **响应（失败）**：
 ```json

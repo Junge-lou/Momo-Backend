@@ -54,6 +54,7 @@ interface SeedVerifyOptions {
   challenge_id?: string | null;
   post_slug?: string | null;
   ip_address?: string | null;
+  origin?: string | null;
   country?: string | null;
   network?: string | null;
   asn?: number | null;
@@ -63,12 +64,12 @@ interface SeedVerifyOptions {
 function seedVerify(options: SeedVerifyOptions = {}): number {
   db.run(sql`
     INSERT INTO "VerifyRecord"
-      ("created_at","event","reason","elapsed_ms","difficulty","challenge_id","post_slug","ip_address","country","network","asn")
+      ("created_at","event","reason","elapsed_ms","difficulty","challenge_id","post_slug","ip_address","origin","country","network","asn")
     VALUES
       (${options.created_at ?? Date.now()}, ${options.event ?? "challenge"}, ${options.reason ?? null},
        ${options.elapsed_ms ?? null}, ${options.difficulty ?? null}, ${options.challenge_id ?? null},
-       ${options.post_slug ?? null}, ${options.ip_address ?? null}, ${options.country ?? null},
-       ${options.network ?? null}, ${options.asn ?? null})
+       ${options.post_slug ?? null}, ${options.ip_address ?? null}, ${options.origin ?? null},
+       ${options.country ?? null}, ${options.network ?? null}, ${options.asn ?? null})
   `);
   const row = db.get(sql`SELECT last_insert_rowid() AS id`) as { id: number };
   return row.id;
@@ -626,6 +627,7 @@ describe("GET /admin/verify/records", () => {
       challenge_id: "cid-rich",
       post_slug: "/posts/rich",
       ip_address: "203.0.113.7",
+      origin: "https://blog.example.com",
       country: "US",
       network: "Comcast Cable",
       asn: 7922,
@@ -646,6 +648,7 @@ describe("GET /admin/verify/records", () => {
       "id",
       "ipAddress",
       "network",
+      "origin",
       "postSlug",
       "reason",
     ]);
@@ -660,6 +663,7 @@ describe("GET /admin/verify/records", () => {
         challengeId: "cid-rich",
         postSlug: "/posts/rich",
         ipAddress: "203.0.113.7",
+        origin: "https://blog.example.com",
         country: "US",
         network: "Comcast Cable",
         asn: 7922,
@@ -674,6 +678,7 @@ describe("GET /admin/verify/records", () => {
         challengeId: "",
         postSlug: "",
         ipAddress: "",
+        origin: "",
         country: "",
         network: "",
         asn: null,

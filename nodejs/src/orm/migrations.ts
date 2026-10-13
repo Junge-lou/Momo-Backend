@@ -65,6 +65,7 @@ const SCHEMA_DDL = `
     "challenge_id" TEXT,
     "post_slug" TEXT,
     "ip_address" TEXT,
+    "origin" TEXT,
     "country" TEXT,
     "network" TEXT,
     "asn" INTEGER
@@ -106,6 +107,12 @@ const MIGRATIONS: Migration[] = [
          WHERE typeof("pub_date") = 'text';
     `,
   },
+  {
+    id: "0002_verify_record_origin",
+    description: "VerifyRecord 增加 origin 列（来源域名绑定：记录解题/被拒的来源域名）",
+    // 纯新增列，旧行为 NULL；新库由 SCHEMA_DDL 直接建出该列
+    sql: `ALTER TABLE "VerifyRecord" ADD COLUMN "origin" TEXT;`,
+  },
 ];
 
 /**
@@ -125,7 +132,15 @@ export function initializeDatabase(sqlite: Database.Database): void {
 
     try {
       const run = sqlite.transaction(() => {
-        sqlite.exec(migration.sql);
+        try {
+          sqlite.exec(migration.sql);
+        } catch (error) {
+          // 新库由 SCHEMA_DDL 一次性建出全部列，随后的「补列」迁移会撞上
+          // duplicate column name —— 那说明目标状态已经达成，按已应用处理，
+          // 否则每次启动都会重复报错。
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/duplicate column name/i.test(message)) throw error;
+        }
         sqlite
           .prepare(`INSERT INTO "SchemaMigration" ("id", "description") VALUES (?, ?)`)
           .run(migration.id, migration.description);

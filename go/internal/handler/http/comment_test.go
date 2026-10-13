@@ -1443,8 +1443,338 @@ func TestSanitizePostSlug(t *testing.T) {
 	})
 }
 
+// ---------------------------------------------------------------------------
+// POST /api/comments —— 来源域名绑定（comment_verify_domain_enabled）
+// ---------------------------------------------------------------------------
+
+/*
+域名绑定与普通来源校验的区别：allow_origin 未配置或为 * 时 **不跳过**（fail-closed），
+且票据里的 org 必须与本次请求的来源一致，否则即使票据本身有效也要拒绝。
+*/
+func TestPostCommentDomainLock(t *testing.T) {
+	t.Run("关闭时不看来源（与旧行为一致）", func(t *testing.T) {
+		resetState(t)
+		// 连无感验证一起关掉，单独观察域名校验的开关语义
+		setSetting(t, "comment_verify_enabled", "false")
+
+		w := call(t, "POST", "/api/comments", postCommentBody("/posts/lock-comment-off", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": "https://anywhere.example"}, "")
+
+		requireStatus(t, w, 200)
+		if countComments(t) != 1 {
+			t.Errorf("关闭域名绑定时应保持旧行为（放行），实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("开启但白名单未配置：403 DOMAIN_NOT_ALLOWED，不落库", func(t *testing.T) {
+		resetState(t)
+		enableDomainLock(t, "")
+
+		w := call(t, "POST", "/api/comments", postCommentBody("/posts/lock-comment-nwl", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": domainBlogOrigin}, "")
+
+		requireStatus(t, w, 403)
+		requireBodyCode(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "DOMAIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 DOMAIN_NOT_ALLOWED，实际 %v", m["reason"])
+		}
+		if countComments(t) != 0 {
+			t.Errorf("被拒请求不应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("开启且 allow_origin=*：同样 fail-closed（普通来源校验在这里会放行）", func(t *testing.T) {
+		resetState(t)
+		enableDomainLock(t, "*")
+
+		w := call(t, "POST", "/api/comments", postCommentBody("/posts/lock-comment-star", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": domainBlogOrigin}, "")
+
+		requireStatus(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "DOMAIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 DOMAIN_NOT_ALLOWED，实际 %v", m["reason"])
+		}
+		if countComments(t) != 0 {
+			t.Errorf("被拒请求不应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("同域票据 + 同域请求：正常落库", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin+","+domainOtherOrigin)
+
+		ip := nextIP()
+		addr := ip + ":1234"
+		const slug = "/posts/lock-comment-ok"
+		ticket, err := utils.CreateVerifyTicket(ip, slug, orgHashFor(t, domainBlogOrigin))
+		if err != nil {
+			t.Fatalf("签发票据失败: %v", err)
+		}
+
+		body := fmt.Sprintf(`{"post_slug":%q,"author":"a","email":"a@b.com","content":"这是一条正常的评论","verify_ticket":%q}`,
+			slug, ticket)
+		w := call(t, "POST", "/api/comments", body, map[string]string{"Origin": domainBlogOrigin}, addr)
+
+		requireStatus(t, w, 200)
+		if countComments(t) != 1 {
+			t.Errorf("同域票据应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("票据来自另一个（同样在白名单内的）域名时拒绝为 VERIFY_REQUIRED", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin+","+domainOtherOrigin)
+
+		ip := nextIP()
+		addr := ip + ":1234"
+		const slug = "/posts/lock-comment-cross"
+		ticket, err := utils.CreateVerifyTicket(ip, slug, orgHashFor(t, domainOtherOrigin))
+		if err != nil {
+			t.Fatalf("签发票据失败: %v", err)
+		}
+
+		body := fmt.Sprintf(`{"post_slug":%q,"author":"a","email":"a@b.com","content":"内容","verify_ticket":%q}`,
+			slug, ticket)
+		w := call(t, "POST", "/api/comments", body, map[string]string{"Origin": domainBlogOrigin}, addr)
+
+		requireStatus(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "VERIFY_REQUIRED" {
+			t.Errorf("reason 期望 VERIFY_REQUIRED，实际 %v", m["reason"])
+		}
+		if countComments(t) != 0 {
+			t.Errorf("跨域票据不应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("白名单外的域名即使带有效票据也被拒（连票据都不该用）", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin)
+
+		ip := nextIP()
+		addr := ip + ":1234"
+		const slug = "/posts/lock-comment-evil"
+		// 用白名单外的域名签一张「有效」票据：请求本身就该被域名闸门拦下
+		ticket, err := utils.CreateVerifyTicket(ip, slug, orgHashOf(t, domainEvilOrigin))
+		if err != nil {
+			t.Fatalf("签发票据失败: %v", err)
+		}
+
+		body := fmt.Sprintf(`{"post_slug":%q,"author":"a","email":"a@b.com","content":"内容","verify_ticket":%q}`,
+			slug, ticket)
+		w := call(t, "POST", "/api/comments", body,
+			map[string]string{"Origin": domainEvilOrigin, "Referer": domainEvilOrigin + "/blog/aosp"}, addr)
+
+		requireStatus(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "DOMAIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 DOMAIN_NOT_ALLOWED，实际 %v", m["reason"])
+		}
+		if countComments(t) != 0 {
+			t.Errorf("被拒请求不应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("域名校验早于限流：冷却期内的白名单外请求返回 403 而不是 429", func(t *testing.T) {
+		resetState(t)
+		enableVerify(t, "1000")
+		enableDomainLock(t, domainBlogOrigin)
+
+		ip := nextIP()
+		addr := ip + ":1234"
+		seedComment(t, &model.Comment{
+			PostSlug: "/posts/lock-comment-throttle", Author: "old", Email: "old@x.com", IPAddress: &ip,
+			ContentText: "t", ContentHTML: "<p>t</p>", Status: "approved",
+			PubDate: time.Now().UnixMilli() - 1_000,
+		})
+
+		denied := call(t, "POST", "/api/comments", postCommentBody("/posts/lock-comment-throttle", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": domainEvilOrigin}, addr)
+		requireStatus(t, denied, 403)
+		if m := decodeJSON(t, denied); m["reason"] != "DOMAIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 DOMAIN_NOT_ALLOWED，实际 %v", m["reason"])
+		}
+
+		// 白名单内来源才会走到限流，命中 60 秒冷却
+		throttled := call(t, "POST", "/api/comments", postCommentBody("/posts/lock-comment-throttle", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": domainBlogOrigin}, addr)
+		requireStatus(t, throttled, 429)
+	})
+
+	t.Run("域名校验早于通用来源校验：开启域名绑定时被拒的是域名 reason", func(t *testing.T) {
+		resetState(t)
+		enableDomainLock(t, domainBlogOrigin)
+
+		// 普通来源校验会判 deny:not_allowed（ORIGIN_NOT_ALLOWED），
+		// 但域名闸门排在它之前，因此这里必须拿到 DOMAIN_NOT_ALLOWED。
+		w := call(t, "POST", "/api/comments", postCommentBody("/posts/lock-comment-order", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": domainEvilOrigin}, "")
+
+		requireStatus(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "DOMAIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 DOMAIN_NOT_ALLOWED（域名闸门在前），实际 %v", m["reason"])
+		}
+	})
+}
+
 // strPtr 返回字符串指针
 func strPtr(s string) *string { return &s }
 
 // int64Ptr 返回 int64 指针
 func int64Ptr(v int64) *int64 { return &v }
+
+// ---------------------------------------------------------------------------
+// POST /api/comments —— 服务端来源校验
+// ---------------------------------------------------------------------------
+
+/*
+allow_origin 配置成白名单后，写接口必须自己拦下白名单外的提交：
+CORS 时代对方站点即使被浏览器拦下响应，请求照样会落库并发信。
+*/
+func TestPostCommentSourceCheck(t *testing.T) {
+	t.Run("Origin 在白名单内时正常提交", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "https://blog.example.com")
+
+		body := `{"post_slug":"/posts/origin-ok","author":"a","email":"a@b.com","content":"内容",` +
+			`"post_url":"https://blog.example.com/posts/demo"}`
+		w := call(t, "POST", "/api/comments", body, map[string]string{"Origin": "https://blog.example.com"}, "")
+
+		requireStatus(t, w, 200)
+		if countComments(t) != 1 {
+			t.Errorf("白名单内的来源应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("Origin 不在白名单内时返回 403 且不落库", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "https://blog.example.com")
+
+		body := `{"post_slug":"/posts/origin-denied","author":"a","email":"a@b.com","content":"内容",` +
+			`"post_url":"https://luoxuedev.top/blog/aosp"}`
+		w := call(t, "POST", "/api/comments", body, map[string]string{
+			"Origin":  "https://luoxuedev.top",
+			"Referer": "https://luoxuedev.top/blog/aosp",
+		}, "")
+
+		requireStatus(t, w, 403)
+		requireBodyCode(t, w, 403)
+		if m := decodeJSON(t, w); m["reason"] != "ORIGIN_NOT_ALLOWED" {
+			t.Errorf("reason 期望 ORIGIN_NOT_ALLOWED，实际 %v", m["reason"])
+		}
+		if countComments(t) != 0 {
+			t.Errorf("被拒请求不应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("服务端转发（无 Origin/Referer，post_url 命中）仍然放行", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "https://blog.example.com")
+
+		body := `{"post_slug":"/posts/origin-proxy","author":"a","email":"a@b.com","content":"内容",` +
+			`"post_url":"https://blog.example.com/posts/demo"}`
+		w := call(t, "POST", "/api/comments", body, nil, "")
+
+		requireStatus(t, w, 200)
+		if countComments(t) != 1 {
+			t.Errorf("服务端转发且 post_url 命中时应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("服务端转发但 post_url 未授权时拒绝（本次事件形态）", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "https://blog.example.com")
+
+		body := `{"post_slug":"/posts/origin-proxy-denied","author":"a","email":"a@b.com","content":"内容",` +
+			`"post_url":"https://luoxuedev.top/blog/aosp"}`
+		w := call(t, "POST", "/api/comments", body, nil, "")
+
+		requireStatus(t, w, 403)
+		if countComments(t) != 0 {
+			t.Errorf("被拒请求不应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("三个来源都没有时拒绝", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "https://blog.example.com")
+
+		w := call(t, "POST", "/api/comments", postCommentBody("/posts/origin-none", "a", "a@b.com", "内容"), nil, "")
+
+		requireStatus(t, w, 403)
+		if countComments(t) != 0 {
+			t.Errorf("无来源的请求不应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("Origin 命中但 post_url 指向别处时拒绝", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "https://blog.example.com")
+
+		body := `{"post_slug":"/posts/origin-mixed","author":"a","email":"a@b.com","content":"内容",` +
+			`"post_url":"https://evil.example/x"}`
+		w := call(t, "POST", "/api/comments", body, map[string]string{"Origin": "https://blog.example.com"}, "")
+
+		requireStatus(t, w, 403)
+		if countComments(t) != 0 {
+			t.Errorf("来源不一致时不应写入评论，实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("未配置 allow_origin 时不启用服务端校验", func(t *testing.T) {
+		resetState(t)
+
+		w := call(t, "POST", "/api/comments", postCommentBody("/posts/origin-off", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": "https://anywhere.example"}, "")
+
+		requireStatus(t, w, 200)
+		if countComments(t) != 1 {
+			t.Errorf("未配置白名单时应保持旧行为（放行），实际 %d 条", countComments(t))
+		}
+	})
+
+	t.Run("allow_origin 为 * 时不启用服务端校验", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "*")
+
+		w := call(t, "POST", "/api/comments", postCommentBody("/posts/origin-star", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": "https://anywhere.example"}, "")
+
+		requireStatus(t, w, 200)
+	})
+
+	t.Run("不带 scheme 的白名单条目按主机名匹配", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "blog.example.com")
+
+		w := call(t, "POST", "/api/comments", postCommentBody("/posts/origin-host-only", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": "https://blog.example.com"}, "")
+
+		requireStatus(t, w, 200)
+	})
+
+	t.Run("来源校验早于限流", func(t *testing.T) {
+		resetState(t)
+		setSetting(t, "allow_origin", "https://blog.example.com")
+
+		ip := nextIP()
+		addr := ip + ":1234"
+		seedComment(t, &model.Comment{
+			PostSlug: "/posts/origin-throttle", Author: "old", Email: "old@x.com", IPAddress: &ip,
+			ContentText: "t", ContentHTML: "<p>t</p>", Status: "approved",
+			PubDate: time.Now().UnixMilli() - 1_000,
+		})
+
+		// 白名单外来源：应判 403 而不是 429（来源校验在限流之前）
+		denied := call(t, "POST", "/api/comments", postCommentBody("/posts/origin-throttle", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": "https://evil.example"}, addr)
+		requireStatus(t, denied, 403)
+		requireBodyCode(t, denied, 403)
+
+		// 白名单内来源：这时才走到限流
+		throttled := call(t, "POST", "/api/comments", postCommentBody("/posts/origin-throttle", "a", "a@b.com", "内容"),
+			map[string]string{"Origin": "https://blog.example.com"}, addr)
+		requireStatus(t, throttled, 429)
+	})
+}

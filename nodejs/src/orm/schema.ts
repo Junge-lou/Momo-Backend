@@ -71,6 +71,13 @@ export const verifyRecords = sqliteTable(
     challenge_id: text("challenge_id"),
     post_slug: text("post_slug"),
     ip_address: text("ip_address"),
+    /**
+     * 归一化后的来源域名（如 `https://blog.example.com`）。
+     *
+     * 仅在 `comment_verify_domain_enabled` 开启时有值；被域名校验拒绝的请求也会记录
+     * （此时它正是「哪个域名在尝试」的线索）。见 doc/data_table.md。
+     */
+    origin: text("origin"),
     /** 以下三列仅 Cloudflare Worker 部署有值（cf.country / cf.asOrganization / cf.asn） */
     country: text("country"),
     network: text("network"),

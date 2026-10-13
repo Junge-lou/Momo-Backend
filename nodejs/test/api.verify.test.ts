@@ -845,3 +845,235 @@ describe("GET /api/verify-email/verify", () => {
     expect(html).toContain("验证链接无效");
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * 来源域名绑定（comment_verify_domain_enabled）
+ *
+ * 与普通的来源校验共用 allow_origin 白名单，但两个语义差异必须钉住：
+ *  - 白名单不可用（空 / 空白 / `*`）时 **fail-closed**，而不是像写接口那样跳过；
+ *  - 来源哈希被签进挑战与票据，A 域名签发的凭证不能在 B 域名兑换。
+ * ------------------------------------------------------------------ */
+
+const BLOG_ORIGIN = "https://blog.example.com";
+const OTHER_ORIGIN = "https://www.example.com";
+const EVIL_ORIGIN = "https://luoxuedev.top";
+
+/** 从挑战 prefix 里取出完整载荷（与服务端同口径的 base64url 解码） */
+function payloadOf(prefix: string): Record<string, unknown> {
+  return JSON.parse(
+    Buffer.from(prefix.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
+  );
+}
+
+/** 本地复算 org 哈希（与实现的拼接顺序独立对照） */
+function orgHashLocal(origin: string): string {
+  return crypto.createHash("sha256").update(`org:${VECTOR_SECRET}:${origin}`, "utf8").digest("hex").slice(0, 16);
+}
+
+/** 携带来源头签发一次挑战 */
+function challengeWith(ip: string, slug: string, headers: Record<string, string> = {}) {
+  return api("/api/verify/challenge", {
+    method: "POST",
+    ip,
+    headers,
+    body: { post_slug: slug, post_url: `${BLOG_ORIGIN}${slug}` },
+  });
+}
+
+describe("来源域名绑定 — 挑战签发（POST /api/verify/challenge）", () => {
+  beforeEach(async () => {
+    await setSetting("comment_verify_enabled", "true");
+    await setSetting("comment_verify_difficulty", TEST_DIFFICULTY);
+  });
+
+  afterEach(() => {
+    clearSettings(["comment_verify_domain_enabled", "allow_origin"]);
+  });
+
+  it("关闭时不看来源，载荷里没有 org，认证记录也不带 origin（零副作用）", async () => {
+    const res = await api("/api/verify/challenge", {
+      method: "POST",
+      ip: uniqueIp(),
+      body: { post_slug: "/posts/lock-off" },
+    });
+    expect(res.status).toBe(200);
+
+    const body = await json(res);
+    expect(body.data.enabled).toBe(true);
+    expect(payloadOf(body.data.prefix).org).toBeUndefined();
+
+    const records = verifyRecordsOf(body.data.challenge_id);
+    expect(records).toHaveLength(1);
+    expect(records[0].origin).toBeNull();
+  });
+
+  it("开启但白名单未配置：fail-closed，403 且不签发任何挑战", async () => {
+    await setSetting("comment_verify_domain_enabled", "true");
+
+    const res = await challengeWith(uniqueIp(), "/posts/lock-nowhitelist", { origin: BLOG_ORIGIN });
+    expect(res.status).toBe(403);
+    const body = await json(res);
+    expect(body.reason).toBe("DOMAIN_NOT_ALLOWED");
+
+    // 只写一条失败记录（没有挑战可签发），并把尝试的域名记下来
+    const rows = db.all(sql`SELECT * FROM "VerifyRecord" ORDER BY "id" ASC`) as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].event).toBe("fail");
+    expect(rows[0].reason).toBe("domain:deny:no_whitelist");
+    expect(rows[0].origin).toBe(BLOG_ORIGIN);
+    expect(rows[0].challenge_id).toBeNull();
+  });
+
+  it("开启且白名单为 *：同样 fail-closed（这是与写接口来源校验的关键差异）", async () => {
+    await setSetting("comment_verify_domain_enabled", "true");
+    await setSetting("allow_origin", "*");
+
+    const res = await challengeWith(uniqueIp(), "/posts/lock-star", { origin: BLOG_ORIGIN });
+    expect(res.status).toBe(403);
+    expect((await json(res)).reason).toBe("DOMAIN_NOT_ALLOWED");
+  });
+
+  it("三个来源都缺时 fail-closed", async () => {
+    await setSetting("comment_verify_domain_enabled", "true");
+    await setSetting("allow_origin", BLOG_ORIGIN);
+
+    const res = await api("/api/verify/challenge", {
+      method: "POST",
+      ip: uniqueIp(),
+      body: { post_slug: "/posts/lock-nosource" },
+    });
+    expect(res.status).toBe(403);
+    expect((await json(res)).reason).toBe("DOMAIN_NOT_ALLOWED");
+  });
+
+  it("命中白名单时签发，并把来源域名签进载荷与认证记录", async () => {
+    await setSetting("comment_verify_domain_enabled", "true");
+    await setSetting("allow_origin", `${BLOG_ORIGIN},${OTHER_ORIGIN}`);
+
+    const res = await challengeWith(uniqueIp(), "/posts/lock-ok", {
+      origin: BLOG_ORIGIN,
+      referer: `${BLOG_ORIGIN}/posts/lock-ok`,
+    });
+    expect(res.status).toBe(200);
+
+    const body = await json(res);
+    // org 必须是**追加在末尾**的字段，且等于本地复算的哈希
+    const payload = payloadOf(body.data.prefix);
+    expect(Object.keys(payload)).toEqual(["v", "cid", "iph", "slug", "iat", "org"]);
+    expect(payload.org).toBe(orgHashLocal(BLOG_ORIGIN));
+
+    const records = verifyRecordsOf(body.data.challenge_id);
+    expect(records).toHaveLength(1);
+    expect(records[0].event).toBe("challenge");
+    expect(records[0].origin).toBe(BLOG_ORIGIN);
+  });
+
+  it("白名单外的来源被拒，并把该域名写进认证记录（便于排查中转）", async () => {
+    await setSetting("comment_verify_domain_enabled", "true");
+    await setSetting("allow_origin", BLOG_ORIGIN);
+
+    const res = await api("/api/verify/challenge", {
+      method: "POST",
+      ip: uniqueIp(),
+      headers: { origin: EVIL_ORIGIN, referer: `${EVIL_ORIGIN}/blog/aosp` },
+      body: { post_slug: "/posts/lock-evil", post_url: `${EVIL_ORIGIN}/blog/aosp` },
+    });
+    expect(res.status).toBe(403);
+
+    const rows = db.all(sql`SELECT * FROM "VerifyRecord" ORDER BY "id" ASC`) as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toBe("domain:deny:not_allowed");
+    expect(rows[0].origin).toBe(EVIL_ORIGIN);
+  });
+});
+
+describe("来源域名绑定 — 答案兑换（POST /api/verify/solution）", () => {
+  beforeEach(async () => {
+    await setSetting("comment_verify_enabled", "true");
+    await setSetting("comment_verify_difficulty", TEST_DIFFICULTY);
+    await setSetting("comment_verify_domain_enabled", "true");
+    await setSetting("allow_origin", `${BLOG_ORIGIN},${OTHER_ORIGIN}`);
+  });
+
+  afterEach(() => {
+    clearSettings(["comment_verify_domain_enabled", "allow_origin"]);
+  });
+
+  /** 兑换：来源头可指定 */
+  async function submit(ip: string, slug: string, challenge: any, headers: Record<string, string>, origin?: string) {
+    const nonces = solveHashwx(challenge.pow);
+    return api("/api/verify/solution", {
+      method: "POST",
+      ip,
+      headers,
+      body: {
+        post_slug: slug,
+        prefix: challenge.prefix,
+        sig: challenge.sig,
+        nonces,
+        elapsed_ms: 1000,
+        post_url: `${origin ?? BLOG_ORIGIN}${slug}`,
+      },
+    });
+  }
+
+  it("同域兑换成功，票据里同样带 org", async () => {
+    const ip = uniqueIp();
+    const slug = "/posts/lock-same";
+    const challenge = (await json(await challengeWith(ip, slug, { origin: BLOG_ORIGIN }))).data;
+
+    const res = await submit(ip, slug, challenge, { origin: BLOG_ORIGIN });
+    expect(res.status).toBe(200);
+
+    const ticket = (await json(res)).data.ticket as string;
+    const dot = ticket.lastIndexOf(".");
+    const payload = JSON.parse(
+      Buffer.from(ticket.slice(0, dot).replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
+    );
+    expect(Object.keys(payload)).toEqual(["v", "iph", "slug", "iat", "exp", "jti", "org"]);
+    expect(payload.org).toBe(orgHashLocal(BLOG_ORIGIN));
+  });
+
+  it("换成另一个也在白名单里的域名兑换时被拒（domain mismatch）", async () => {
+    const ip = uniqueIp();
+    const slug = "/posts/lock-cross";
+    const challenge = (await json(await challengeWith(ip, slug, { origin: BLOG_ORIGIN }))).data;
+
+    const res = await submit(ip, slug, challenge, { origin: OTHER_ORIGIN }, OTHER_ORIGIN);
+    expect(res.status).toBe(403);
+    const body = await json(res);
+    expect(body.message).toBe("Verification failed");
+    expect(body.reason).toBe("domain mismatch");
+
+    // 失败同样落一条记录，并带上**本次**观测到的域名
+    const rows = db.all(sql`SELECT * FROM "VerifyRecord" ORDER BY "id" ASC`) as any[];
+    const fail = rows.filter((row) => row.event === "fail");
+    expect(fail).toHaveLength(1);
+    expect(fail[0].origin).toBe(OTHER_ORIGIN);
+  });
+
+  it("白名单外的域名兑换时直接 403 DOMAIN_NOT_ALLOWED（早于算力校验）", async () => {
+    const ip = uniqueIp();
+    const slug = "/posts/lock-outside";
+    const challenge = (await json(await challengeWith(ip, slug, { origin: BLOG_ORIGIN }))).data;
+
+    const res = await submit(ip, slug, challenge, { origin: EVIL_ORIGIN }, EVIL_ORIGIN);
+    expect(res.status).toBe(403);
+    expect((await json(res)).reason).toBe("DOMAIN_NOT_ALLOWED");
+  });
+
+  it("开关中途打开：没有 org 的旧挑战返回 domain required（重新验证即可）", async () => {
+    const ip = uniqueIp();
+    const slug = "/posts/lock-legacy";
+
+    // 先在关闭状态下签发（载荷里没有 org）
+    await setSetting("comment_verify_domain_enabled", "false");
+    const challenge = (await json(await challengeWith(ip, slug, { origin: BLOG_ORIGIN }))).data;
+    expect(payloadOf(challenge.prefix).org).toBeUndefined();
+
+    await setSetting("comment_verify_domain_enabled", "true");
+    const res = await submit(ip, slug, challenge, { origin: BLOG_ORIGIN });
+    expect(res.status).toBe(403);
+    expect((await json(res)).reason).toBe("domain required");
+  });
+});

@@ -115,6 +115,7 @@ type verifyRecordRow struct {
 	ChallengeID sql.NullString `db:"challenge_id"`
 	PostSlug    sql.NullString `db:"post_slug"`
 	IPAddress   sql.NullString `db:"ip_address"`
+	Origin      sql.NullString `db:"origin"`
 	Country     sql.NullString `db:"country"`
 	Network     sql.NullString `db:"network"`
 	ASN         sql.NullInt64  `db:"asn"`
@@ -130,6 +131,7 @@ type verifyRecordSeed struct {
 	ChallengeID *string
 	PostSlug    *string
 	IPAddress   *string
+	Origin      *string
 	Country     *string
 	Network     *string
 	ASN         *int64
@@ -152,11 +154,12 @@ func seedVerifyRecord(t *testing.T, seed verifyRecordSeed) int64 {
 	}
 
 	res, err := testDB.Exec(`INSERT INTO VerifyRecord
-		(created_at, event, reason, elapsed_ms, difficulty, challenge_id, post_slug, ip_address, country, network, asn)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(created_at, event, reason, elapsed_ms, difficulty, challenge_id, post_slug, ip_address, origin, country, network, asn)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		seed.CreatedAt, seed.Event,
 		nullableString(seed.Reason), nullableInt(seed.ElapsedMs), nullableInt(seed.Difficulty),
 		nullableString(seed.ChallengeID), nullableString(seed.PostSlug), nullableString(seed.IPAddress),
+		nullableString(seed.Origin),
 		nullableString(seed.Country), nullableString(seed.Network), nullableInt(seed.ASN))
 	if err != nil {
 		t.Fatalf("写入 VerifyRecord 失败: %v", err)
@@ -833,6 +836,7 @@ func TestVerifyRecordsFieldMappingAndNulls(t *testing.T) {
 			ChallengeID: strPtr("cid-full"),
 			PostSlug:    strPtr("/posts/full"),
 			IPAddress:   strPtr("1.2.3.4"),
+			Origin:      strPtr("https://blog.example.com"),
 			Country:     strPtr("US"),
 			Network:     strPtr("Cloudflare"),
 			ASN:         int64Ptr(64512),
@@ -855,11 +859,14 @@ func TestVerifyRecordsFieldMappingAndNulls(t *testing.T) {
 	requireString(t, "minimal.challengeId", minimal.ChallengeID, "")
 	requireString(t, "minimal.postSlug", minimal.PostSlug, "")
 	requireString(t, "minimal.ipAddress", minimal.IPAddress, "")
+	requireString(t, "minimal.origin", minimal.Origin, "")
 	requireString(t, "minimal.country", minimal.Country, "")
 	requireString(t, "minimal.network", minimal.Network, "")
 	requireBodyContains(t, w, `"elapsedMs":null`)
 	requireBodyContains(t, w, `"difficulty":null`)
 	requireBodyContains(t, w, `"asn":null`)
+	// 未开启域名绑定（或旧数据）的 origin 必须是空串而不是 null
+	requireBodyContains(t, w, `"origin":""`)
 
 	// 第二行：字段逐项映射，createdAt 与落库毫秒数逐字节一致
 	full := data.List[1]
@@ -869,6 +876,7 @@ func TestVerifyRecordsFieldMappingAndNulls(t *testing.T) {
 	requireString(t, "full.challengeId", full.ChallengeID, "cid-full")
 	requireString(t, "full.postSlug", full.PostSlug, "/posts/full")
 	requireString(t, "full.ipAddress", full.IPAddress, "1.2.3.4")
+	requireString(t, "full.origin", full.Origin, "https://blog.example.com")
 	requireString(t, "full.country", full.Country, "US")
 	requireString(t, "full.network", full.Network, "Cloudflare")
 	requireIntPtr(t, "full.elapsedMs", full.ElapsedMs, 1234)
@@ -876,6 +884,7 @@ func TestVerifyRecordsFieldMappingAndNulls(t *testing.T) {
 	requireIntPtr(t, "full.asn", full.ASN, 64512)
 	requireBodyContains(t, w, `"elapsedMs":1234`)
 	requireBodyContains(t, w, `"asn":64512`)
+	requireBodyContains(t, w, `"origin":"https://blog.example.com"`)
 }
 
 func TestVerifyRecordsEmptyResult(t *testing.T) {

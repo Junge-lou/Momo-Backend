@@ -315,3 +315,123 @@ func TestRunMigrationsOnEmptyLegacyTable(t *testing.T) {
 		t.Errorf("空表也应记录 1 条迁移，实际 %d 条", n)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 0002_verify_record_origin
+// ---------------------------------------------------------------------------
+
+const originMigrationID = "0002_verify_record_origin"
+
+// hasVerifyRecordColumn 判断 VerifyRecord 是否有某一列
+func hasVerifyRecordColumn(t *testing.T, db *sqlx.DB, column string) bool {
+	t.Helper()
+	var count int
+	if err := db.Get(&count,
+		`SELECT COUNT(*) FROM pragma_table_info('VerifyRecord') WHERE name = ?`, column); err != nil {
+		t.Fatalf("读取 VerifyRecord 表结构失败: %v", err)
+	}
+	return count > 0
+}
+
+// createLegacyVerifyRecordTable 建出**没有 origin 列**的旧表（本次迁移的目标形态）
+func createLegacyVerifyRecordTable(t *testing.T, db *sqlx.DB) {
+	t.Helper()
+	ddl := `CREATE TABLE VerifyRecord (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at INTEGER NOT NULL,
+		event TEXT NOT NULL,
+		reason TEXT,
+		elapsed_ms INTEGER,
+		difficulty INTEGER,
+		challenge_id TEXT,
+		post_slug TEXT,
+		ip_address TEXT,
+		country TEXT,
+		network TEXT,
+		asn INTEGER
+	)`
+	if _, err := db.Exec(ddl); err != nil {
+		t.Fatalf("创建旧版 VerifyRecord 表失败: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO VerifyRecord (created_at, event) VALUES (1, 'challenge')`); err != nil {
+		t.Fatalf("写入历史记录失败: %v", err)
+	}
+}
+
+// TestRunMigrationsAddsVerifyRecordOrigin 旧库必须被幂等地补上 origin 列，
+// 历史行保持 NULL（旧行为不记录来源域名），且重复执行不会报错或重复记录。
+func TestRunMigrationsAddsVerifyRecordOrigin(t *testing.T) {
+	db := newMigrationDB(t)
+	createLegacyCommentTable(t, db, "INTEGER")
+	createLegacyVerifyRecordTable(t, db)
+
+	if hasVerifyRecordColumn(t, db, "origin") {
+		t.Fatalf("前置条件：旧表不应有 origin 列")
+	}
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations 失败: %v", err)
+	}
+	if !hasVerifyRecordColumn(t, db, "origin") {
+		t.Fatalf("迁移后 VerifyRecord 应带上 origin 列")
+	}
+	if n := schemaMigrationCount(t, db); n != 2 {
+		t.Errorf("两条迁移都应被记录，实际 %d 条", n)
+	}
+
+	// 历史行保持 NULL
+	var nulls int
+	if err := db.Get(&nulls, `SELECT COUNT(*) FROM VerifyRecord WHERE origin IS NULL`); err != nil {
+		t.Fatalf("检查历史行失败: %v", err)
+	}
+	if nulls != 1 {
+		t.Errorf("历史行的 origin 应为 NULL，实际满足的行数 %d", nulls)
+	}
+	// 新写入的行可以使用该列
+	if _, err := db.Exec(`INSERT INTO VerifyRecord (created_at, event, origin) VALUES (2, 'fail', 'https://blog.example.com')`); err != nil {
+		t.Fatalf("写入 origin 失败: %v", err)
+	}
+
+	// 幂等：重复执行不得报错，也不得重复记录
+	for i := 0; i < 2; i++ {
+		if err := RunMigrations(db); err != nil {
+			t.Fatalf("第 %d 次重复执行失败: %v", i+1, err)
+		}
+		if n := schemaMigrationCount(t, db); n != 2 {
+			t.Fatalf("重复执行后迁移记录应仍为 2 条，实际 %d 条", n)
+		}
+	}
+}
+
+// TestRunMigrationsToleratesExistingVerifyRecordOrigin 新库由建表 DDL 直接建出 origin 列，
+// 随后的「补列」迁移会撞上 duplicate column name —— 必须按已应用处理，
+// 否则每次启动都会重复报错（Node 端的 0002 是同样的姿态）。
+func TestRunMigrationsToleratesExistingVerifyRecordOrigin(t *testing.T) {
+	db := newMigrationDB(t)
+	createLegacyCommentTable(t, db, "INTEGER")
+	// 与 InitSchema 的新库形态一致：建表时就带 origin
+	if _, err := db.Exec(`CREATE TABLE VerifyRecord (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at INTEGER NOT NULL,
+		event TEXT NOT NULL,
+		origin TEXT
+	)`); err != nil {
+		t.Fatalf("创建新库形态的 VerifyRecord 表失败: %v", err)
+	}
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations 失败: %v", err)
+	}
+	if n := schemaMigrationCount(t, db); n != 2 {
+		t.Errorf("列已存在时应按已应用处理并记录，实际 %d 条", n)
+	}
+
+	// 仍然只有一个 origin 列（没有重复补列）
+	var count int
+	if err := db.Get(&count, `SELECT COUNT(*) FROM pragma_table_info('VerifyRecord') WHERE name = 'origin'`); err != nil {
+		t.Fatalf("统计 origin 列失败: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("origin 列应恰好一个，实际 %d 个", count)
+	}
+}

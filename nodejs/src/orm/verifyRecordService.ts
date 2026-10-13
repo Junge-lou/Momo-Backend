@@ -29,6 +29,11 @@ export interface VerifyRecordInput {
   challengeId?: string | null;
   postSlug?: string | null;
   ip?: string | null;
+  /**
+   * 归一化后的来源域名（如 `https://blog.example.com`）。
+   * 仅 comment_verify_domain_enabled 开启时有值；被域名校验拒绝的请求也记录。
+   */
+  origin?: string | null;
   /** 以下三项仅 Worker 部署有值 */
   country?: string | null;
   network?: string | null;
@@ -104,6 +109,8 @@ export interface VerifyRecordItem {
   challengeId: string;
   postSlug: string;
   ipAddress: string;
+  /** 来源域名（域名绑定开启时有值） */
+  origin: string;
   country: string;
   network: string;
   asn: number | null;
@@ -160,6 +167,8 @@ export async function recordVerifyEvent(input: VerifyRecordInput): Promise<void>
         challenge_id: input.challengeId ?? null,
         post_slug: input.postSlug ?? null,
         ip_address: input.ip ?? null,
+        // 空串与 null 一律落 NULL：未开启域名绑定时没有来源域名，不该在表里留下空串
+        origin: input.origin ? input.origin : null,
         country: input.country ?? null,
         network: input.network ?? null,
         asn: input.asn ?? null,
@@ -488,6 +497,7 @@ export async function listVerifyRecords(query: VerifyRecordQuery): Promise<{
     challenge_id: string | null;
     post_slug: string | null;
     ip_address: string | null;
+    origin: string | null;
     country: string | null;
     network: string | null;
     asn: number | null;
@@ -504,6 +514,7 @@ export async function listVerifyRecords(query: VerifyRecordQuery): Promise<{
       challengeId: row.challenge_id || "",
       postSlug: row.post_slug || "",
       ipAddress: row.ip_address || "",
+      origin: row.origin || "",
       country: row.country || "",
       network: row.network || "",
       asn: row.asn === null || row.asn === undefined ? null : Number(row.asn),

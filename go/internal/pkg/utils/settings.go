@@ -68,6 +68,8 @@ var allowedSettings = map[string]bool{
 	"comment_verify_difficulty":      true,
 	"comment_verify_instr_enabled":   true,
 	"comment_verify_block_automated": true,
+	// 来源域名绑定：复用 allow_origin 白名单，白名单不可用时 fail-closed
+	"comment_verify_domain_enabled": true,
 	// 认证记录（无感验证落库）：保留天数与「是否记录签发事件」
 	"comment_verify_retention_days": true,
 	"comment_verify_log_challenge":  true,

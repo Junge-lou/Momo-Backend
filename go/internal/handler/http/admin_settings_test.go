@@ -85,7 +85,8 @@ func TestGetSettingsTypeGroups(t *testing.T) {
 		"allow_origin": "https://a.com", "admin_comment_key": "k", "admin_comment_key_enabled": "true",
 		"ip_blacklist": `[]`, "email_blacklist": `[]`,
 		"comment_verify_enabled": "true", "comment_verify_difficulty": "12", "trust_proxy": "false",
-		"comment_spam_keywords": `["加微信"]`, "comment_spam_max_links": "5",
+		"comment_verify_domain_enabled": "false",
+		"comment_spam_keywords":         `["加微信"]`, "comment_spam_max_links": "5",
 		"comment_spam_min_length": "0", "comment_spam_duplicate_window": "60",
 		"admin_name": "boss",
 	} {
@@ -125,7 +126,8 @@ func TestGetSettingsTypeGroups(t *testing.T) {
 			typeParam: "security",
 			mustHave: []string{
 				"ip_blacklist", "email_blacklist", "allow_origin", "admin_comment_key",
-				"admin_comment_key_enabled", "comment_verify_enabled", "comment_verify_difficulty", "trust_proxy",
+				"admin_comment_key_enabled", "comment_verify_enabled", "comment_verify_difficulty",
+				"comment_verify_domain_enabled", "trust_proxy",
 			},
 			mustNotHave: []string{"site_name", "smtp_host", "admin_name"},
 		},

@@ -94,6 +94,7 @@ func InitSchema(db *sqlx.DB) error {
 		challenge_id TEXT,
 		post_slug TEXT,
 		ip_address TEXT,
+		origin TEXT,
 		country TEXT,
 		network TEXT,
 		asn INTEGER

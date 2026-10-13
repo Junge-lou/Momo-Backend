@@ -635,6 +635,7 @@ describe('GET /admin/verify/records —— 字段形状', () => {
 			challenge_id: 'cid-1',
 			post_slug: '/posts/a',
 			ip_address: '203.0.113.10',
+			origin: 'https://blog.example.com',
 			country: 'US',
 			network: 'Cloudflare, Inc.',
 			asn: 13335,
@@ -652,6 +653,7 @@ describe('GET /admin/verify/records —— 字段形状', () => {
 			'id',
 			'ipAddress',
 			'network',
+			'origin',
 			'postSlug',
 			'reason',
 		]);
@@ -666,6 +668,7 @@ describe('GET /admin/verify/records —— 字段形状', () => {
 			challengeId: 'cid-1',
 			postSlug: '/posts/a',
 			ipAddress: '203.0.113.10',
+			origin: 'https://blog.example.com',
 			country: 'US',
 			network: 'Cloudflare, Inc.',
 			asn: 13335,
@@ -681,6 +684,8 @@ describe('GET /admin/verify/records —— 字段形状', () => {
 			challengeId: '',
 			postSlug: '',
 			ipAddress: '',
+			// 未开启域名绑定时落库为 NULL，映射为空字符串（不是 'null'）
+			origin: '',
 			country: '',
 			network: '',
 			asn: null,

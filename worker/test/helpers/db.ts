@@ -278,6 +278,8 @@ export interface SeedVerifyRecordInput {
 	challenge_id?: string | null;
 	post_slug?: string | null;
 	ip_address?: string | null;
+	/** 归一化后的来源域名（仅开启域名绑定时有值） */
+	origin?: string | null;
 	country?: string | null;
 	network?: string | null;
 	asn?: number | null;
@@ -293,6 +295,7 @@ export interface VerifyRecordRow {
 	challenge_id: string | null;
 	post_slug: string | null;
 	ip_address: string | null;
+	origin: string | null;
 	country: string | null;
 	network: string | null;
 	asn: number | null;
@@ -314,6 +317,7 @@ export async function seedVerifyRecord(input: SeedVerifyRecordInput = {}): Promi
 		challenge_id: null,
 		post_slug: null,
 		ip_address: null,
+		origin: null,
 		country: null,
 		network: null,
 		asn: null,
@@ -322,8 +326,8 @@ export async function seedVerifyRecord(input: SeedVerifyRecordInput = {}): Promi
 
 	const result = await testEnv.MOMO_DB.prepare(
 		`INSERT INTO VerifyRecord
-       (created_at, event, reason, elapsed_ms, difficulty, challenge_id, post_slug, ip_address, country, network, asn)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (created_at, event, reason, elapsed_ms, difficulty, challenge_id, post_slug, ip_address, origin, country, network, asn)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	)
 		.bind(
 			row.created_at,
@@ -334,6 +338,7 @@ export async function seedVerifyRecord(input: SeedVerifyRecordInput = {}): Promi
 			row.challenge_id,
 			row.post_slug,
 			row.ip_address,
+			row.origin,
 			row.country,
 			row.network,
 			row.asn

@@ -102,13 +102,17 @@ describe('SilentVerify —— 基础渲染', () => {
 		expect(container.textContent).toContain('验证中...');
 	});
 
-	it('挑战请求体为 { post_slug }', async () => {
+	it('挑战请求体为 { post_slug, post_url }', async () => {
 		const fetch = fetchMock(challengeBody);
 		renderVerify();
 		await waitFor(() => expect(fetch.calls.length).toBeGreaterThan(0));
 		expect(fetch.calls[0].url).toBe(`${API_URL}/api/verify/challenge`);
 		expect(fetch.calls[0].method).toBe('POST');
-		expect(JSON.parse(fetch.calls[0].init.body)).toEqual({ post_slug: '/posts/demo' });
+		// post_url 与浏览器自动带的 Origin/Referer 一起参与服务端的来源域名校验
+		expect(JSON.parse(fetch.calls[0].init.body)).toEqual({
+			post_slug: '/posts/demo',
+			post_url: window.location.href,
+		});
 	});
 
 	it('postSlug 为空时不发起任何请求', async () => {
@@ -190,6 +194,8 @@ describe('SilentVerify —— 完整解题流程（协议 v2）', () => {
 
 		const body = solutionRequestBody(fetch);
 		expect(body.post_slug).toBe('/posts/demo');
+		// 域名绑定要求兑换请求与签发请求声明同一个来源
+		expect(body.post_url).toBe(window.location.href);
 		expect(body.prefix).toBe('prefix-x');
 		expect(body.sig).toBe('sig-x');
 		// nonces 与子挑战一一对应，且是十进制字符串（64 位放不进 JS number）
@@ -446,6 +452,74 @@ describe('SilentVerify —— 失败与重试', () => {
 	});
 });
 
+/* ------------------------------------------------------------------ *
+ * 来源域名绑定（comment_verify_domain_enabled）
+ *
+ * 后端在挑战签发、答案兑换、评论提交三处都校验来源域名。前端要做的只有两件事：
+ * 请求体带上 post_url（Origin/Referer 由浏览器自动加），以及把「域名未授权」
+ * 与「可重试的失败」区分开 —— 前者重试毫无意义。
+ * ------------------------------------------------------------------ */
+describe('SilentVerify —— 来源域名绑定', () => {
+	it('挑战被 DOMAIN_NOT_ALLOWED 拒绝时显示不可重试的域名提示', async () => {
+		fetchMock(async (url) =>
+			url.includes('/api/verify/challenge')
+				? jsonResponse({ code: 403, reason: 'DOMAIN_NOT_ALLOWED' }, { ok: false, status: 403 })
+				: jsonResponse({})
+		);
+		const { container } = renderVerify();
+		await waitFor(() => expect(container.querySelector('button.verify-box')).toBeTruthy());
+
+		const button = container.querySelector('button.verify-box');
+		expect(button.textContent).toContain('当前域名未通过验证');
+		// 重试无用：按钮禁用（与「后端过旧」同一处理）
+		expect(button.disabled).toBe(true);
+	});
+
+	it('兑换被 domain mismatch / DOMAIN_NOT_ALLOWED 拒绝时同样不可重试', async () => {
+		for (const reason of ['domain mismatch', 'DOMAIN_NOT_ALLOWED']) {
+			fetchMock(async (url) =>
+				url.includes('/api/verify/challenge')
+					? challengeBody()
+					: jsonResponse({ code: 403, message: 'Verification failed', reason }, { ok: false, status: 403 })
+			);
+			const { container } = renderVerify();
+			await waitFor(() => expect(container.querySelector('button.verify-box')).toBeTruthy());
+			expect(container.querySelector('button.verify-box').textContent).toContain('当前域名未通过验证');
+			expect(container.querySelector('button.verify-box').disabled).toBe(true);
+			cleanup();
+		}
+	});
+
+	it('domain required（挑战签发时开关还没开）归入可重试的失败态', async () => {
+		fetchMock(async (url) =>
+			url.includes('/api/verify/challenge')
+				? challengeBody()
+				: jsonResponse(
+						{ code: 403, message: 'Verification failed', reason: 'domain required' },
+						{ ok: false, status: 403 }
+					)
+		);
+		const { container } = renderVerify();
+		await waitFor(() => expect(container.querySelector('button.verify-box')).toBeTruthy());
+
+		const button = container.querySelector('button.verify-box');
+		expect(button.textContent).toContain('验证失败');
+		expect(button.textContent).toContain('点击重试');
+		expect(button.disabled).toBe(false);
+	});
+
+	it('language="en" 时域名提示为英文', async () => {
+		fetchMock(async (url) =>
+			url.includes('/api/verify/challenge')
+				? jsonResponse({ code: 403, reason: 'DOMAIN_NOT_ALLOWED' }, { ok: false, status: 403 })
+				: jsonResponse({})
+		);
+		const { container } = renderVerify({ language: 'en' });
+		await waitFor(() => expect(container.querySelector('button.verify-box')).toBeTruthy());
+		expect(container.querySelector('button.verify-box').textContent).toContain('This domain is not authorized');
+	});
+});
+
 describe('SilentVerify —— 移动端与多语言', () => {
 	it('移动端只显示图标，不显示文字', async () => {
 		const restore = stubMatchMedia(true);
@@ -505,8 +579,7 @@ describe('SilentVerify —— 移动端与多语言', () => {
 		await waitFor(() => expect(container.textContent).toContain('Verified'));
 	});
 
-	it('language="en" 时「后端过旧」与「浏览器过低」文案为英文', async () => {
-		// 后端过旧（挑战里没有 pow）
+	it('language="en" 时「后端过旧」与「浏览器过低」文案为英文', async () => {		// 后端过旧（挑战里没有 pow）
 		fetchMock(async (url) =>
 			url.includes('/api/verify/challenge')
 				? jsonResponse({ data: { enabled: true, prefix: 'p', sig: 's' } })
@@ -537,7 +610,10 @@ describe('SilentVerify —— 生命周期', () => {
 		await waitFor(() => expect(fetch.calls.length).toBe(1));
 		await rerender({ postSlug: '/posts/other' });
 		await waitFor(() => expect(fetch.calls.length).toBe(2));
-		expect(JSON.parse(fetch.calls[1].init.body)).toEqual({ post_slug: '/posts/other' });
+		expect(JSON.parse(fetch.calls[1].init.body)).toEqual({
+			post_slug: '/posts/other',
+			post_url: window.location.href,
+		});
 	});
 
 	it('postSlug 未变化时不会重复验证', async () => {

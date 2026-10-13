@@ -98,7 +98,7 @@ func (h *CommentHandler) GetSettings(c *gin.Context) {
 	settingsGroups := map[string][]string{
 		"basic":    {"site_name", "admin_email", "comment_auto_approve", "comment_spam_keywords", "comment_spam_max_links", "comment_spam_min_length", "comment_spam_duplicate_window", "blogger_badge_enabled", "blogger_badge_text", "placeholder_name", "placeholder_email", "placeholder_content", "placeholder_url"},
 		"email":    {"smtp_host", "smtp_port", "email_user", "email_password", "email_secure", "email_enabled", "email_verify_enabled", "verify_base_url", "reply_template", "notification_template"},
-		"security": {"allow_origin", "admin_comment_key", "admin_comment_key_enabled", "ip_blacklist", "email_blacklist", "comment_verify_enabled", "comment_verify_difficulty", "comment_verify_instr_enabled", "comment_verify_block_automated", "comment_verify_retention_days", "comment_verify_log_challenge", "trust_proxy"},
+		"security": {"allow_origin", "admin_comment_key", "admin_comment_key_enabled", "ip_blacklist", "email_blacklist", "comment_verify_enabled", "comment_verify_difficulty", "comment_verify_instr_enabled", "comment_verify_block_automated", "comment_verify_domain_enabled", "comment_verify_retention_days", "comment_verify_log_challenge", "trust_proxy"},
 		"account":  {"admin_name"},
 	}
 
@@ -842,6 +842,7 @@ func (h *CommentHandler) ExportSettings(c *gin.Context) {
 		"comment_verify_difficulty":      true,
 		"comment_verify_instr_enabled":   true,
 		"comment_verify_block_automated": true,
+		"comment_verify_domain_enabled":  true,
 		"comment_verify_retention_days":  true,
 		"comment_verify_log_challenge":   true,
 		"trust_proxy":                    true,
@@ -1059,6 +1060,7 @@ func (h *CommentHandler) ImportSettings(c *gin.Context) {
 		"comment_verify_difficulty":      true,
 		"comment_verify_instr_enabled":   true,
 		"comment_verify_block_automated": true,
+		"comment_verify_domain_enabled":  true,
 		"comment_verify_retention_days":  true,
 		"comment_verify_log_challenge":   true,
 		"trust_proxy":                    true,

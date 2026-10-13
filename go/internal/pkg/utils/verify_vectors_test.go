@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -68,6 +69,17 @@ type verifyVectorFixture struct {
 	TicketPayloadJSON string `json:"ticketPayloadJson"`
 	TicketBody        string `json:"ticketBody"`
 	TicketSig         string `json:"ticketSig"`
+
+	// 来源域名绑定（comment_verify_domain_enabled）的固定向量：
+	// org 哈希与「带 org 的挑战 / 票据」的逐字节载荷
+	Origin                     string `json:"origin"`
+	OriginHash                 string `json:"originHash"`
+	ChallengePayloadJSONLocked string `json:"challengePayloadJsonLocked"`
+	PrefixLocked               string `json:"prefixLocked"`
+	SigLocked                  string `json:"sigLocked"`
+	TicketPayloadJSONLocked    string `json:"ticketPayloadJsonLocked"`
+	TicketBodyLocked           string `json:"ticketBodyLocked"`
+	TicketSigLocked            string `json:"ticketSigLocked"`
 }
 
 var (
@@ -138,6 +150,12 @@ func TestVerifyVectorFixtureShape(t *testing.T) {
 		"instrumentation.seed": fixture.Instrumentation.Seed,
 		"ticketBody":           fixture.TicketBody,
 		"ticketSig":            fixture.TicketSig,
+		"origin":               fixture.Origin,
+		"originHash":           fixture.OriginHash,
+		"prefixLocked":         fixture.PrefixLocked,
+		"sigLocked":            fixture.SigLocked,
+		"ticketBodyLocked":     fixture.TicketBodyLocked,
+		"ticketSigLocked":      fixture.TicketSigLocked,
 	} {
 		if value == "" {
 			t.Errorf("fixture 缺少 %s", name)
@@ -310,6 +328,154 @@ func TestVerifyVectorTicketPayload(t *testing.T) {
 	}
 	if VerifyTicket(live, fixture.IP, "/posts/other") {
 		t.Errorf("票据不应跨文章有效")
+	}
+}
+
+// ---------- 来源域名绑定（comment_verify_domain_enabled） ----------
+
+// TestVerifyVectorOriginHash 钉死 org 哈希：hex(SHA256("org:" + secret + ":" + 归一化来源))[:16]
+func TestVerifyVectorOriginHash(t *testing.T) {
+	fixture := loadVerifyFixture(t)
+
+	if got := sha256HexLocal("org:" + fixture.Secret + ":" + fixture.Origin)[:16]; got != fixture.OriginHash {
+		t.Errorf("org 哈希公式漂移:\n got=%s\nwant=%s", got, fixture.OriginHash)
+	}
+	if got := hashOrigin(fixture.Origin, fixture.Secret); got != fixture.OriginHash {
+		t.Errorf("hashOrigin 口径漂移:\n got=%s\nwant=%s", got, fixture.OriginHash)
+	}
+	if len(fixture.OriginHash) != 16 {
+		t.Errorf("org 哈希应截取 16 位十六进制，实际 %d 位", len(fixture.OriginHash))
+	}
+	// 与 iph 同构但派生标签不同：同一串输入到两个标签下必须得到不同结果
+	if hashOrigin(fixture.Origin, fixture.Secret) == hashVerifyIP(fixture.Origin, fixture.Secret) {
+		t.Errorf("org 与 ip 的哈希必须使用不同的派生标签")
+	}
+	if hashOrigin(fixture.Origin, fixture.Secret) == hashOrigin(fixture.Origin, fixture.Secret+"x") {
+		t.Errorf("不同密钥应得到不同的 org 哈希")
+	}
+}
+
+// TestVerifyVectorChallengePayloadLocked 钉死「开启域名绑定」时的挑战载荷：
+// org 必须**追加在末尾**（前面的字段顺序是三端共用的签名口径），带 org 的载荷与签名逐字节可比。
+func TestVerifyVectorChallengePayloadLocked(t *testing.T) {
+	fixture := loadVerifyFixture(t)
+
+	iat := fixture.Iat
+	raw, err := json.Marshal(verifyChallengePayload{
+		V:    VerifyProtocolVersion,
+		Cid:  fixture.Cid,
+		Iph:  fixture.IPHash,
+		Slug: fixture.Slug,
+		Iat:  &iat,
+		Org:  fixture.OriginHash,
+	})
+	if err != nil {
+		t.Fatalf("序列化挑战载荷失败: %v", err)
+	}
+	if string(raw) != fixture.ChallengePayloadJSONLocked {
+		t.Errorf("带 org 的挑战载荷字段顺序/内容漂移:\n got=%s\nwant=%s", raw, fixture.ChallengePayloadJSONLocked)
+	}
+	if !strings.HasSuffix(string(raw), `"org":"`+fixture.OriginHash+`"}`) {
+		t.Errorf("org 必须是载荷的**最后一个**字段，实际 %s", raw)
+	}
+	if got := b64urlEncode(raw); got != fixture.PrefixLocked {
+		t.Errorf("带 org 的挑战前缀编码漂移:\n got=%s\nwant=%s", got, fixture.PrefixLocked)
+	}
+	if got := hmacSHA256(fixture.PrefixLocked, fixture.Secret); got != fixture.SigLocked {
+		t.Errorf("带 org 的挑战签名口径漂移:\n got=%s\nwant=%s", got, fixture.SigLocked)
+	}
+	if got := hmacLocal(fixture.PrefixLocked, fixture.Secret); got != fixture.SigLocked {
+		t.Errorf("本地 HMAC 副本与 fixture 不一致: %s", got)
+	}
+	if got := b64urlLocal([]byte(fixture.ChallengePayloadJSONLocked)); got != fixture.PrefixLocked {
+		t.Errorf("本地 base64url 副本与 fixture 不一致: %s", got)
+	}
+
+	// 未开启域名绑定时整个 org 字段必须缺席（形状与旧版本完全一致）
+	unlocked, err := json.Marshal(verifyChallengePayload{
+		V: VerifyProtocolVersion, Cid: fixture.Cid, Iph: fixture.IPHash, Slug: fixture.Slug, Iat: &iat,
+	})
+	if err != nil {
+		t.Fatalf("序列化挑战载荷失败: %v", err)
+	}
+	if string(unlocked) != fixture.ChallengePayloadJSON {
+		t.Errorf("未开启域名绑定时载荷形状必须与旧版本一致:\n got=%s\nwant=%s", unlocked, fixture.ChallengePayloadJSON)
+	}
+
+	// 固定向量的 iat 是 2024 年：来源一致时应只因过期被拒绝（证明域名校验已通过），
+	// 来源不一致时必须以 domain mismatch 停在域名校验上。
+	withVectorSecret(t, fixture.Secret)
+	resetSettings(t)
+	setSetting(t, settingVerifyDifficulty, strconv.Itoa(fixture.Difficulty))
+
+	if ok, reason := VerifySolution(VerifySolutionInput{
+		Prefix: fixture.PrefixLocked, Sig: fixture.SigLocked, Nonces: mustJSON(t, []any{"0", "0", "0", "0"}),
+		ElapsedMs: mustJSON(t, 500), IP: fixture.IP, PostSlug: fixture.Slug, OrgHash: fixture.OriginHash,
+	}); ok || reason != "challenge expired" {
+		t.Errorf("来源一致的固定向量应因过期被拒绝，实际 ok=%v reason=%q", ok, reason)
+	}
+	if ok, reason := VerifySolution(VerifySolutionInput{
+		Prefix: fixture.PrefixLocked, Sig: fixture.SigLocked, Nonces: mustJSON(t, []any{"0", "0", "0", "0"}),
+		ElapsedMs: mustJSON(t, 500), IP: fixture.IP, PostSlug: fixture.Slug,
+		OrgHash: hashOrigin("https://other.example.com", fixture.Secret),
+	}); ok || reason != "domain mismatch" {
+		t.Errorf("来源不一致时应以 domain mismatch 拒绝，实际 ok=%v reason=%q", ok, reason)
+	}
+}
+
+// TestVerifyVectorTicketPayloadLocked 钉死「开启域名绑定」时的票据载荷与签名
+func TestVerifyVectorTicketPayloadLocked(t *testing.T) {
+	fixture := loadVerifyFixture(t)
+
+	raw, err := json.Marshal(verifyTicketPayload{
+		V:    VerifyProtocolVersion,
+		Iph:  fixture.IPHash,
+		Slug: fixture.Slug,
+		Iat:  fixture.Iat,
+		Exp:  fixture.Exp,
+		Jti:  fixture.Jti,
+		Org:  fixture.OriginHash,
+	})
+	if err != nil {
+		t.Fatalf("序列化票据载荷失败: %v", err)
+	}
+	if string(raw) != fixture.TicketPayloadJSONLocked {
+		t.Errorf("带 org 的票据载荷字段顺序/内容漂移:\n got=%s\nwant=%s", raw, fixture.TicketPayloadJSONLocked)
+	}
+	if !strings.HasSuffix(string(raw), `"org":"`+fixture.OriginHash+`"}`) {
+		t.Errorf("org 必须是票据载荷的**最后一个**字段，实际 %s", raw)
+	}
+	if got := b64urlEncode(raw); got != fixture.TicketBodyLocked {
+		t.Errorf("带 org 的票据 body 口径漂移:\n got=%s\nwant=%s", got, fixture.TicketBodyLocked)
+	}
+	if got := hmacSHA256(fixture.TicketBodyLocked, fixture.Secret); got != fixture.TicketSigLocked {
+		t.Errorf("带 org 的票据签名口径漂移:\n got=%s\nwant=%s", got, fixture.TicketSigLocked)
+	}
+	if got := hmacLocal(fixture.TicketBodyLocked, fixture.Secret); got != fixture.TicketSigLocked {
+		t.Errorf("本地 HMAC 副本与 fixture 不一致: %s", got)
+	}
+
+	// 未开启域名绑定时 org 缺席
+	unlocked, err := json.Marshal(verifyTicketPayload{
+		V: VerifyProtocolVersion, Iph: fixture.IPHash, Slug: fixture.Slug,
+		Iat: fixture.Iat, Exp: fixture.Exp, Jti: fixture.Jti,
+	})
+	if err != nil {
+		t.Fatalf("序列化票据载荷失败: %v", err)
+	}
+	if string(unlocked) != fixture.TicketPayloadJSON {
+		t.Errorf("未开启域名绑定时票据形状必须与旧版本一致:\n got=%s\nwant=%s", unlocked, fixture.TicketPayloadJSON)
+	}
+
+	// 固定向量的 exp 早已过期，整体校验必须失败；但失败原因不能是签名不匹配
+	withVectorSecret(t, fixture.Secret)
+	resetSettings(t)
+	lockedTicket := fixture.TicketBodyLocked + "." + fixture.TicketSigLocked
+	if VerifyTicket(lockedTicket, fixture.IP, fixture.Slug, fixture.OriginHash) {
+		t.Errorf("已过期的固定向量票据不应通过校验")
+	}
+	if !constantTimeEqual(hmacSHA256(fixture.TicketBodyLocked, fixture.Secret), fixture.TicketSigLocked) {
+		t.Errorf("固定票据向量的签名不匹配，说明 HMAC 口径漂移")
 	}
 }
 

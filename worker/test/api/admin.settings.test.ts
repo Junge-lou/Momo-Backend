@@ -373,6 +373,27 @@ describe('PUT /admin/settings', () => {
 		expect(full.body.data.site_name).toBe('Momo');
 		expect((await rawSettings()).site_name).toBe('Momo');
 	});
+
+	it('comment_verify_domain_enabled 在白名单内，且属于安全分组（默认未配置时不出现）', async () => {
+		// 默认（未配置）时键不会凭空出现 —— 关闭语义由 getSetting 的 null 兜底
+		const before = await api('/admin/settings?type=security', { headers: authed() });
+		expect(before.body.data.comment_verify_domain_enabled).toBeUndefined();
+
+		const put = await api('/admin/settings', {
+			method: 'PUT',
+			headers: authed(),
+			body: { comment_verify_domain_enabled: 'true' },
+		});
+		expect(put.status).toBe(200);
+		expect(await rawSetting('comment_verify_domain_enabled')).toBe('true');
+
+		const security = await api('/admin/settings?type=security', { headers: authed() });
+		expect(security.body.data.comment_verify_domain_enabled).toBe('true');
+
+		// 完整白名单同样下发
+		const full = await api('/admin/settings', { headers: authed() });
+		expect(full.body.data.comment_verify_domain_enabled).toBe('true');
+	});
 });
 
 describe('POST /admin/settings/test-email', () => {

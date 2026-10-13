@@ -27,6 +27,7 @@ import {
 	verifySolution,
 	verifyTicket,
 } from '../../src/utils/verify';
+import { hashVerifyOrigin } from '../../src/utils/verifyCrypto';
 // 替身模块（setup file 已把 src/utils/hashwx.ts 整体映射到这里），用于「客户端侧」求解
 import { mintHashwxSpec, solveHashwxSpec } from '../stubs/hashwx';
 
@@ -107,6 +108,10 @@ describe('协议 v2 跨语言固定向量（fixture 验收）', () => {
 			'honeypot',
 			'prefix',
 			'sig',
+			'origin',
+			'originHash',
+			'prefixLocked',
+			'sigLocked',
 			'hashwx',
 			'instrumentation',
 			'ticketBody',
@@ -158,6 +163,41 @@ describe('协议 v2 跨语言固定向量（fixture 验收）', () => {
 		expect(await localHmac(fixture.ticketBody, SECRET)).toBe(fixture.ticketSig);
 	});
 
+	it('来源域名绑定的哈希口径与字段位置未漂移', async () => {
+		// org = hex(SHA256("org:" + secret + ":" + 归一化来源))[:16]
+		expect((await localSha256Hex(`org:${SECRET}:${fixture.origin}`)).slice(0, 16)).toBe(
+			fixture.originHash
+		);
+
+		// 开启域名绑定后 org **追加在末尾**：插在中间会让同一份挑战在两端得到不同 prefix
+		const payload = {
+			v: 2,
+			cid: fixture.cid,
+			iph: fixture.ipHash,
+			slug: SLUG,
+			iat: fixture.iat,
+			org: fixture.originHash,
+		};
+		expect(JSON.stringify(payload)).toBe(fixture.challengePayloadJsonLocked);
+		expect(b64url(fixture.challengePayloadJsonLocked)).toBe(fixture.prefixLocked);
+		expect(await localHmac(fixture.prefixLocked, SECRET)).toBe(fixture.sigLocked);
+	});
+
+	it('开启域名绑定的票据载荷同样把 org 追加在末尾', async () => {
+		const payload = {
+			v: 2,
+			iph: fixture.ipHash,
+			slug: SLUG,
+			iat: fixture.iat,
+			exp: fixture.exp,
+			jti: fixture.jti,
+			org: fixture.originHash,
+		};
+		expect(JSON.stringify(payload)).toBe(fixture.ticketPayloadJsonLocked);
+		expect(b64url(fixture.ticketPayloadJsonLocked)).toBe(fixture.ticketBodyLocked);
+		expect(await localHmac(fixture.ticketBodyLocked, SECRET)).toBe(fixture.ticketSigLocked);
+	});
+
 	it('HashWX 挑战的派生标签与公式未漂移', async () => {
 		// c = SHA256("hashwx:C:" + secret + ":" + cid)，冒号分隔符与顺序不可改
 		expect(await localSha256Hex(`hashwx:C:${SECRET}:${fixture.cid}`)).toBe(fixture.hashwx.c);
@@ -204,6 +244,34 @@ describe('协议 v2 跨语言固定向量（fixture 验收）', () => {
 		expect(payload.iph).toBe(fixture.ipHash);
 		expect(payload.slug).toBe(SLUG);
 		expect(payload.exp - payload.iat).toBe(300 * 1000);
+	});
+
+	it('实测实现：hashVerifyOrigin 与本地复算一致', async () => {
+		expect(await hashVerifyOrigin(fixture.origin, SECRET)).toBe(fixture.originHash);
+	});
+
+	it('实测实现：开启域名绑定时挑战与票据都带上 org（且不开启时完全没有该字段）', async () => {
+		const locked = await createChallenge(bindings, IP, SLUG, fixture.originHash);
+		const lockedPayload = JSON.parse(fromB64url(locked.prefix));
+		expect(Object.keys(lockedPayload)).toEqual(['v', 'cid', 'iph', 'slug', 'iat', 'org']);
+		expect(lockedPayload.org).toBe(fixture.originHash);
+
+		const lockedTicket = await createTicket(bindings, IP, SLUG, fixture.originHash);
+		const lockedBody = lockedTicket.slice(0, lockedTicket.lastIndexOf('.'));
+		const ticketPayload = JSON.parse(fromB64url(lockedBody));
+		expect(Object.keys(ticketPayload)).toEqual(['v', 'iph', 'slug', 'iat', 'exp', 'jti', 'org']);
+		expect(ticketPayload.org).toBe(fixture.originHash);
+
+		// 关闭时形状与旧版本完全一致（零副作用）
+		const plain = await createChallenge(bindings, IP, SLUG);
+		expect(JSON.parse(fromB64url(plain.prefix)).org).toBeUndefined();
+		expect(Object.keys(JSON.parse(fromB64url(plain.prefix)))).toEqual([
+			'v',
+			'cid',
+			'iph',
+			'slug',
+			'iat',
+		]);
 	});
 
 	it('fixture 的 prefix + 签名能走通全链路（时间冻结在有效期内）', async () => {

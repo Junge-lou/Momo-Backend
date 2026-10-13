@@ -6,8 +6,9 @@ import { CreateCommentInput } from "../../type/prisma";
 import { sendCommentReplyNotification, sendCommentNotification, isEmailServiceAvailable, checkEmailVerified, saveVerificationToken, hasUnverifiedToken, sendVerificationEmail } from "../../utils/email";
 import { canPostComment, checkContent, countCodePoints, MAX_POST_SLUG, sanitizePostSlug, sanitizeHtml, sanitizeUrl, checkIpBlacklist, checkEmailBlacklist, getCommentStatus } from "../../utils/security";
 import { checkCommentSpam } from "../../utils/spam";
+import { checkRequestSource, isSourceDenied } from "../../utils/origin";
 import { getSetting } from "../../utils/settings";
-import { isVerifyEnabled, verifyTicket } from "../../utils/verify";
+import { isVerifyEnabled, checkVerifyDomain, verifyTicket } from "../../utils/verify";
 import { parseMarkdown } from "../../utils/markdown";
 import { getClientIP } from "../../utils/ip";
 import LogService from "../../utils/log";
@@ -58,6 +59,56 @@ export default async (c: Context): Promise<Response> => {
       );
     }
 
+    // 来源域名绑定（comment_verify_domain_enabled）：
+    // 与下面的通用来源校验共用同一份白名单，但语义更严 —— allow_origin 未配置或为 `*` 时
+    // **不跳过**（fail-closed），而且要求票据与本请求同域。
+    //
+    // 刻意排在通用来源校验**之前**：开启域名绑定时它是更严的那道闸门，让被拒请求统一拿到
+    // 域名的 reason（DOMAIN_NOT_ALLOWED）而不是笼统的 ORIGIN_NOT_ALLOWED，便于博主区分
+    // 「白名单没配好」与「别的站点在滥用」。位置同样早于限流 / 黑名单 / 发信路径。
+    const domain = await checkVerifyDomain({
+      origin: c.req.header("origin"),
+      referer: c.req.header("referer"),
+      postUrl: data.post_url,
+    });
+    if (!domain.ok) {
+      LogService.warn("拒绝来源未授权的评论提交（域名校验）", {
+        decision: domain.decision,
+        origin: domain.origin,
+        post_slug: data.post_slug,
+      });
+      return c.json(
+        {
+          code: 403,
+          message: "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+          reason: "DOMAIN_NOT_ALLOWED",
+        },
+        403
+      );
+    }
+
+    // 服务端来源校验：CORS 只是浏览器机制，挡不住「对方站点在自己的服务端转发」。
+    // allow_origin 配置成白名单（非空且不含 *）时，写接口只接受来自白名单的提交请求；
+    // 判定必须早于限流 / 黑名单 / 人机验证与**一切发信路径**（验证邮件、站长通知、回复通知），
+    // 否则白名单外的站点照样能借本站 SMTP 发信。口径见 doc/vectors/origin-v1.json。
+    const sourceDecision = checkRequestSource({
+      allowOrigin: await getSetting("allow_origin"),
+      origin: c.req.header("origin"),
+      referer: c.req.header("referer"),
+      postUrl: data.post_url,
+    });
+    if (isSourceDenied(sourceDecision)) {
+      LogService.warn("拒绝来源未授权的评论提交", { decision: sourceDecision, post_slug: data.post_slug });
+      return c.json(
+        {
+          code: 403,
+          message: "Request source is not allowed. Add this site to the allow-origin list in the dashboard.",
+          reason: "ORIGIN_NOT_ALLOWED",
+        },
+        403
+      );
+    }
+
     // 管理员身份判定（只依赖 admin_email）：
     // 必须早于限流与黑名单检查，因为管理员邮箱不受 60 秒评论冷却限制。
     const adminEmail = (await getSetting("admin_email")) || "";
@@ -101,7 +152,7 @@ export default async (c: Context): Promise<Response> => {
       // 注意只对「票据比对」用净化值：评论落库仍用原始 post_slug，
       // 因为读取端是按原始 post_slug 查询的，改动存储口径会让评论查不出来。
       const ticketSlug = sanitizePostSlug(data.post_slug);
-      const ticketOk = await verifyTicket(data.verify_ticket, ip, ticketSlug);
+      const ticketOk = await verifyTicket(data.verify_ticket, ip, ticketSlug, domain.orgHash);
       if (!ticketOk) {
         return c.json(
           {

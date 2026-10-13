@@ -56,7 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_status ON Comment(status);
 
 -- VerifyRecord table：评论无感验证（人机验证）的认证记录
 -- 每次认证最多三条记录（challenge / pass / fail），通过 challenge_id 串联；
--- 新库靠本文件建表，已有 D1 由启动自迁移 0002_verify_record_table 补齐
+-- 新库靠本文件建表，已有 D1 由启动自迁移 0002_verify_record_table / 0003_verify_record_origin 补齐
 CREATE TABLE IF NOT EXISTS VerifyRecord (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     -- 事件时间，Unix 毫秒整数（与 Comment.pub_date 口径一致）
@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS VerifyRecord (
     challenge_id TEXT,
     post_slug TEXT,
     ip_address TEXT,
+    -- 归一化后的来源域名（来源域名绑定）：未开启域名绑定时为 NULL
+    origin TEXT,
     -- 以下三列仅 Cloudflare 部署有值（cf.country / cf.asOrganization / cf.asn）
     country TEXT,
     network TEXT,
